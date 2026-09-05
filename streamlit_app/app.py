@@ -335,13 +335,7 @@ st.sidebar.caption(
 try:
     predictions = get_predictions(AS_OF)
 except Exception as e:
-    import inspect
     st.error(f"Couldn't score players: {e}")
-    st.code(
-        f"predict.__file__ = {predict.__file__}\n"
-        f"signature = {inspect.signature(predict.score_players)}\n"
-        f"sys.path[:5] = {sys.path[:5]}"
-    )
     st.stop()
 
 PREDICTS_GW = (int(predictions["predicts_gw"].iloc[0])
