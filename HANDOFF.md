@@ -52,6 +52,18 @@ in another) and cross-session messages don't leave a permanent record here.
   ~54MB; GitHub warns (recommended max 50MB) but doesn't block (100MB hard
   limit) — leave it, don't move to Git LFS unless it actually becomes a
   problem.
+- **Streamlit-specific analysis views added** (2026-09-05, per the desktop
+  GUI_PLAN.md chart audit's highest-priority findings, adapted for
+  Streamlit): captain shortlist with ±MAE error bars (flags when top
+  candidates are statistically indistinguishable — the audit's top finding),
+  rotation-risk table off `start_probability` (not raw minutes), squad- and
+  pool-wide availability triage (status flags the model doesn't always
+  know), a log-scale differential finder (2D replacement for the desktop's
+  cut 3D scatter), and Price Watch reframed as ranked risers/fallers lists.
+  All matplotlib-based (`streamlit_app/requirements.txt` now includes it),
+  transparent backgrounds since per-viewer theme isn't server-detectable.
+  Verified rendering correctly on the live Streamlit Cloud deploy, not just
+  locally.
 
 ## Known gaps / possibly worth doing next
 
@@ -110,5 +122,6 @@ the time you see them — verify against the repo, not just what a peer
 claimed).**
 
 ---
-*Last updated: 2026-09-05, after taking over desktop packaging/deployment
-and confirming a clean end-to-end GUI smoke test.*
+*Last updated: 2026-09-05, after shifting focus to the Streamlit app —
+added the chart-audit-derived analysis views and verified them on the live
+Streamlit Cloud deployment, not just locally.*
