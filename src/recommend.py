@@ -19,9 +19,13 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 POS_LIMITS = {"GKP": (1, 1), "DEF": (3, 5), "MID": (2, 5), "FWD": (1, 3)}
 STARTERS = 11
 
-# players you've told the assistant not to suggest selling, regardless of
-# model score (e.g. "in good form", "keeping for a run of good fixtures")
-PROTECTED_PLAYERS = {"Cherki"}
+# Players never suggested for transfer OUT, regardless of model score.
+#
+# Empty by default. This module is imported by a PUBLIC, multi-user Streamlit
+# app where any visitor can view any manager's squad, so a name hardcoded here
+# silently removes that player from EVERY visitor's transfer suggestions, not
+# just the repo owner's. Pass `protected=` per call instead of editing this.
+PROTECTED_PLAYERS: set[str] = set()
 
 
 def load_predictions() -> pd.DataFrame:
@@ -96,13 +100,18 @@ def best_starting_xi(squad: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return best.sort_values("pred_points_adj", ascending=False), bench
 
 
-def suggest_transfers(squad_with_value: pd.DataFrame, bank: float, top_n: int = 3) -> pd.DataFrame:
+def suggest_transfers(squad_with_value: pd.DataFrame, bank: float, top_n: int = 3,
+                      protected: set[str] | None = None) -> pd.DataFrame:
+    """protected: player web_names to never suggest selling. Defaults to the
+    module-level PROTECTED_PLAYERS (empty), so a caller opts in per squad
+    rather than the whole deployment inheriting one person's preference."""
     preds = load_predictions()
     preds = preds[preds["status_ok"]]
     owned_ids = set(squad_with_value["element"])
     suggestions = []
 
-    candidate_rows = squad_with_value[~squad_with_value["web_name"].isin(PROTECTED_PLAYERS)]
+    keep = PROTECTED_PLAYERS if protected is None else protected
+    candidate_rows = squad_with_value[~squad_with_value["web_name"].isin(keep)]
     for _, row in candidate_rows.sort_values("pred_points_adj").iterrows():
         pos = row["position"]
         budget = row["sell_price_m"] + bank  # real sellable budget, not market price

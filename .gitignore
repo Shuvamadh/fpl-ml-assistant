@@ -8,3 +8,9 @@ venv/
 *.log
 .streamlit/secrets.toml
 data/raw.zip
+
+# Runtime scoring artifacts, regenerated on every app start. These were being
+# committed and would overwrite each other between the frozen/live scoring
+# modes and between machines.
+data/player_predictions.csv
+data/raw/gws_current_live.csv

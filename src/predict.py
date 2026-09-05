@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from features import FEATURE_COLS, NUMERIC_ROLL_COLS, ROLL_WINDOWS, _team_game_table, build_team_id_map
-from fixtures_fdr import next_fixture_summary, upcoming_fixtures_by_team
+from fixtures_fdr import next_fixture_summary, target_event, upcoming_fixtures_by_team
 from fpl_api import bootstrap_static, player_summary
 
 # small residual post-hoc adjustment on top of the model's own learned
@@ -55,19 +55,36 @@ def fetch_current_gws(player_ids: list[int], id_to_team: dict[int, str],
     return df
 
 
-def build_current_features(gws: pd.DataFrame) -> pd.DataFrame:
+def build_current_features(gws: pd.DataFrame, for_event: int | None = None) -> pd.DataFrame:
     """Same rolling logic as features.py, but keep only the LATEST row per
     player (i.e. features describing 'form entering the next gameweek'),
-    with NO shift since we want form INCLUDING the most recent GW played."""
+    with NO shift since we want form INCLUDING the most recent GW played.
+
+    for_event is the gameweek being predicted. Rows from that gameweek onward
+    are dropped before any rolling window is computed, so every player is
+    described by the same number of completed gameweeks. Mid-gameweek this
+    matters a lot: without it, a club that has already played the live
+    gameweek carries that result in prev_gw_points and in every _r3/_r5 mean,
+    so its players get scored on information nobody else's players have yet.
+    """
     df = gws.sort_values(["element", "GW"]).reset_index(drop=True)
+    if for_event is not None:
+        df = df[df["GW"] < for_event].reset_index(drop=True)
     for col in NUMERIC_ROLL_COLS:
         if col not in df.columns:
             df[col] = np.nan
     grp = df.groupby("element")
     for w in ROLL_WINDOWS:
+        # min_periods=1 meant a "5-game rolling mean" was often a single
+        # match, so one good game read as settled form -- worst in GW1-4 and
+        # for anyone just back from injury. Requiring 2 observations leaves
+        # NaN instead, which the model handles natively and which routes
+        # genuinely history-less players to the position-median fallback in
+        # score_players() rather than to a confident number built on one game.
+        min_obs = 1 if w <= 2 else 2
         for col in NUMERIC_ROLL_COLS:
             df[f"{col}_r{w}"] = grp[col].transform(
-                lambda s, w=w: s.rolling(w, min_periods=1).mean()
+                lambda s, w=w, m=min_obs: s.rolling(w, min_periods=m).mean()
             )
     df["season_pts_mean_prior"] = grp["total_points"].transform(
         lambda s: s.expanding(min_periods=1).mean()
@@ -100,7 +117,7 @@ def build_current_features(gws: pd.DataFrame) -> pd.DataFrame:
     # endpoint, then pull that team's own latest rolling form.
     id_map = build_team_id_map(df)
     latest_with_id = latest_team_form.merge(id_map, on=["season", "team"], how="left")
-    next_fx = upcoming_fixtures_by_team(n=1)[["team", "opponent"]].rename(
+    next_fx = upcoming_fixtures_by_team(n=1, from_event=for_event)[["team", "opponent"]].rename(
         columns={"team": "team_id", "opponent": "next_opponent_id"}
     )
     df = df.merge(next_fx, on="team_id", how="left")
@@ -113,7 +130,9 @@ def build_current_features(gws: pd.DataFrame) -> pd.DataFrame:
     # trained on true is_home, so a wrong/constant value here biased every
     # single prediction (previously always "1", i.e. every player looked
     # like they were at home next gameweek).
-    fdr = next_fixture_summary(n=1)[["team", "is_home"]].rename(columns={"team": "team_id"})
+    fdr = next_fixture_summary(n=1, from_event=for_event)[["team", "is_home"]].rename(
+        columns={"team": "team_id"}
+    )
     df = df.merge(fdr, on="team_id", how="left")
     df["is_home"] = df["is_home"].fillna(True).astype(int)
     df["cost"] = df["value"] / 10.0
@@ -140,8 +159,23 @@ def load_minutes_classifier() -> lgb.Booster | None:
     return lgb.Booster(model_file=str(path)) if path.exists() else None
 
 
-def score_players() -> pd.DataFrame:
+def score_players(as_of: str = "frozen") -> pd.DataFrame:
+    """Score every player for one upcoming gameweek.
+
+    as_of="frozen" (default) scores everyone from the last fully completed
+    gameweek, so no club has a head start on any other. This is the only mode
+    that produces a comparable ranking while a gameweek is in progress.
+
+    as_of="live" uses whatever each player's club has actually played,
+    including a gameweek still under way. Useful for looking at one club that
+    has already played, but the resulting numbers are NOT comparable across
+    clubs and must not be sorted into a single table.
+    """
+    if as_of not in ("frozen", "live"):
+        raise ValueError(f"as_of must be 'frozen' or 'live', got {as_of!r}")
     bs = bootstrap_static()
+    predicts_gw = target_event(bs)
+    cutoff = predicts_gw if as_of == "frozen" else None
     players = pd.DataFrame(bs["elements"])
     teams = pd.DataFrame(bs["teams"])[["id", "name", "short_name"]].rename(columns={"id": "team_id"})
     positions = pd.DataFrame(bs["element_types"])[["id", "singular_name_short"]].rename(
@@ -170,7 +204,7 @@ def score_players() -> pd.DataFrame:
     (DATA_DIR / "raw").mkdir(parents=True, exist_ok=True)
     gws.to_csv(DATA_DIR / "raw" / "gws_current_live.csv", index=False)
 
-    feat = build_current_features(gws) if not gws.empty else pd.DataFrame()
+    feat = build_current_features(gws, for_event=cutoff) if not gws.empty else pd.DataFrame()
     for c in FEATURE_COLS:
         if c not in feat.columns:
             feat[c] = np.nan
@@ -209,7 +243,7 @@ def score_players() -> pd.DataFrame:
     scored["now_cost_m"] = scored["now_cost"] / 10.0
     scored["status_ok"] = scored["status"] == "a"
 
-    fdr = next_fixture_summary(n=5)
+    fdr = next_fixture_summary(n=5, from_event=cutoff)
     scored = scored.merge(fdr, left_on="team_id", right_on="team", how="left")
     scored["next_fdr"] = scored["next_fdr"].fillna(3)
     scored["fdr_next_n_mean"] = scored["fdr_next_n_mean"].fillna(3)
@@ -217,6 +251,11 @@ def score_players() -> pd.DataFrame:
     scored["pred_points_adj"] = scored["pred_points"] * scored["fdr_multiplier"]
 
     scored["value_ratio"] = scored["pred_points_adj"] / scored["now_cost_m"]
+
+    # every row records which gameweek it is a prediction FOR, so the UI can
+    # never silently sort predictions with different horizons into one list.
+    scored["predicts_gw"] = predicts_gw
+    scored["scored_as_of"] = as_of
 
     # price-change signal from FPL's own transfer-momentum projection
     # (likelihood: >=3 imminent rise, <=-3 imminent fall; see bootstrap docs)
@@ -240,6 +279,7 @@ def score_players() -> pd.DataFrame:
         "tackles", "recoveries", "clearances_blocks_interceptions",
         "expected_goals", "expected_assists", "expected_goal_involvements",
         "news", "price_change_percent", "price_signal", "price_flag",
+        "predicts_gw", "scored_as_of",
     ]
     return scored[keep_cols].sort_values("pred_points_adj", ascending=False).reset_index(drop=True)
 

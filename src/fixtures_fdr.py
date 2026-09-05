@@ -18,13 +18,43 @@ def team_id_to_name(bs: dict | None = None) -> dict[int, str]:
     return {t["id"]: t["short_name"] for t in bs["teams"]}
 
 
-def upcoming_fixtures_by_team(n: int = 5) -> pd.DataFrame:
-    """One row per (team, upcoming fixture), earliest first, capped at n per team."""
+def last_finished_event(bs: dict | None = None) -> int:
+    """Highest gameweek that is fully complete. During a live GW this is the
+    PREVIOUS gameweek -- the boundary at which every player in the league has
+    exactly the same amount of history behind them."""
+    bs = bs or bootstrap_static()
+    done = [e["id"] for e in bs["events"] if e.get("finished")]
+    return max(done) if done else 0
+
+
+def target_event(bs: dict | None = None) -> int:
+    """The gameweek predictions are FOR: the one in progress if a gameweek is
+    live, otherwise the next one up. Every player is scored against this same
+    gameweek regardless of whether their own club has already played it."""
+    return last_finished_event(bs) + 1
+
+
+def upcoming_fixtures_by_team(n: int = 5, from_event: int | None = None) -> pd.DataFrame:
+    """One row per (team, upcoming fixture), earliest first, capped at n per team.
+
+    from_event anchors every team to the same gameweek. Without it this used
+    `finished` to decide what counts as "upcoming", which breaks mid-gameweek:
+    a club that has already played GW3 has its GW3 fixture dropped and rolls
+    forward to GW4, while every other club still resolves to GW3. Predictions
+    for the two groups then answer different questions but land in one ranked
+    table. Anchoring on the event number keeps a played-but-current fixture in
+    scope so all 20 clubs line up on the same gameweek.
+    """
     fx = fixtures()
     names = team_id_to_name()
     rows = []
     for f in fx:
-        if f["finished"] or f["event"] is None:
+        if f["event"] is None:
+            continue
+        if from_event is not None:
+            if f["event"] < from_event:
+                continue
+        elif f["finished"]:
             continue
         rows.append({
             "team": f["team_h"], "opponent": f["team_a"], "is_home": True,
@@ -43,10 +73,10 @@ def upcoming_fixtures_by_team(n: int = 5) -> pd.DataFrame:
     return df.groupby("team").head(n).reset_index(drop=True)
 
 
-def next_fixture_summary(n: int = 5) -> pd.DataFrame:
+def next_fixture_summary(n: int = 5, from_event: int | None = None) -> pd.DataFrame:
     """One row per team: next fixture string, its difficulty, and mean
     difficulty over the next n fixtures (lower = easier run)."""
-    df = upcoming_fixtures_by_team(n)
+    df = upcoming_fixtures_by_team(n, from_event=from_event)
     if df.empty:
         return df
     first = df.sort_values(["team", "event"]).groupby("team").first().reset_index()
