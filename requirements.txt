@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+lightgbm
+requests
+PySide6
+matplotlib
+pyarrow
+scipy
+pulp
