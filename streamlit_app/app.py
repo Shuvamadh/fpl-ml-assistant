@@ -24,10 +24,19 @@ SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+# gui/league_extras.py is deliberately Qt-free (plain DataFrames in/out) so
+# it's shared rather than reimplemented here -- but the REST of gui/ imports
+# PySide6, which this deployment doesn't install, so only this one file's
+# directory goes on the path, not gui/data_bridge.py or anything else in it.
+GUI_DIR = Path(__file__).resolve().parent.parent / "gui"
+if str(GUI_DIR) not in sys.path:
+    sys.path.insert(0, str(GUI_DIR))
+
 import lightgbm as lgb
 
 import chips
 import fpl_api
+import league_extras
 import league_projection
 import llm_assist
 import mini_league
@@ -101,6 +110,31 @@ def get_squad(team_id: int, event: int):
 @st.cache_data(ttl=90, show_spinner=False)  # short TTL: this genuinely changes during live matches
 def get_live_score(squad: pd.DataFrame, event: int) -> dict:
     return recommend.live_squad_score(squad, event)
+
+
+@st.cache_data(ttl=1800, show_spinner="Pulling GW-by-GW history for every manager...")
+def get_manager_hist(league_id: int) -> pd.DataFrame:
+    """One row per (manager, gameweek): points, points_on_bench, value, etc.
+    Same shape as gui/data_bridge.py's _manager_gw_history, reimplemented
+    here (not imported) since that file pulls in PySide6 at module level and
+    this deployment deliberately doesn't install it."""
+    import concurrent.futures as cf
+
+    standings = get_standings(league_id)
+    rows = []
+
+    def _fetch(row):
+        try:
+            hist = fpl_api.entry_history(row["entry"])["current"]
+            return row["entry_name"], hist
+        except Exception:
+            return row["entry_name"], []
+
+    with cf.ThreadPoolExecutor(max_workers=12) as ex:
+        for entry_name, hist in ex.map(_fetch, [r for _, r in standings.iterrows()]):
+            for h in hist:
+                rows.append({**h, "entry_name": entry_name})
+    return pd.DataFrame(rows)
 
 
 def money(v) -> str:
@@ -293,49 +327,118 @@ with tabs[tab_idx["Price Watch"]]:
 
 # ----------------------------------------------------------- Mini League ---
 with tabs[tab_idx["Mini League"]]:
-    st.subheader(f"{league_name} standings")
-    if IS_LIVE_GW:
-        st.caption(f"🔴 GW{event} is live — event_total/total below update in "
-                   f"near-real-time as matches are played (FPL computes this "
-                   f"server-side, not this app).")
-    st.dataframe(
-        standings[["rank", "entry_name", "player_name", "event_total", "total"]],
-        use_container_width=True, hide_index=True,
-    )
-    st.bar_chart(standings.set_index("entry_name")["total"], horizontal=True)
-
     league_squads = get_league_squads(int(league_id), int(event))
     insights = get_league_insights(int(league_id), int(event), int(active_team_id))
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("**Most owned (template)**")
-        st.dataframe(insights["ownership"].head(10), use_container_width=True, hide_index=True)
-    with col2:
-        st.markdown("**Captaincy choices**")
-        st.dataframe(insights["captains"], use_container_width=True, hide_index=True)
-    with col3:
-        st.markdown(f"**{chosen_label}'s differentials**")
-        st.dataframe(insights["differentials"], use_container_width=True, hide_index=True)
+    ml_tabs = st.tabs(["Table", "Ownership & Captaincy", "Projections & Transfers", "Fun Stats", "Tools"])
 
-    st.divider()
-    st.subheader("Projected GW winner (⚠️ stale — based on last known picks)")
-    proj = league_projection.project_gw_winner(league_squads, standings, int(event))
-    st.dataframe(
-        proj[["projected_rank", "entry_name", "captain_name", "projected_gw_points", "projected_total", "rank_change"]],
-        use_container_width=True, hide_index=True,
-    )
+    with ml_tabs[0]:
+        st.subheader(f"{league_name} standings")
+        if IS_LIVE_GW:
+            st.caption(f"🔴 GW{event} is live — event_total/total below update in "
+                       f"near-real-time as matches are played (FPL computes this "
+                       f"server-side, not this app).")
+        st.dataframe(
+            standings[["rank", "entry_name", "player_name", "event_total", "total"]],
+            use_container_width=True, hide_index=True,
+        )
+        st.bar_chart(standings.set_index("entry_name")["total"], horizontal=True)
 
-    st.subheader("Per-manager transfer suggestions (assumed bank = £0.0m)")
-    league_tx = league_projection.per_manager_transfer_suggestions(league_squads)
-    st.dataframe(league_tx.head(20) if not league_tx.empty else league_tx, use_container_width=True, hide_index=True)
+    with ml_tabs[1]:
+        eo = league_extras.effective_ownership(league_squads)
+        st.subheader("Effective ownership (EO)")
+        st.caption(
+            "Plain ownership hides the number that actually matters: a player owned "
+            "50% but captained by 40% behaves like 90% ownership, since captained "
+            "copies score double. Ranked by EO, not raw ownership."
+        )
+        st.dataframe(
+            eo[["web_name", "position", "owned_pct", "captained_n", "eo_pct", "template_risk"]].head(20),
+            use_container_width=True, hide_index=True,
+        )
 
-    st.subheader("Banter stats")
-    banter = league_projection.banter_stats(league_squads, standings, insights)
-    st.dataframe(banter["per_manager_stats"], use_container_width=True, hide_index=True)
-    st.caption(banter["known_gap"])
-    st.markdown("**Template adherence**")
-    st.dataframe(banter["template_adherence"], use_container_width=True, hide_index=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Captaincy choices**")
+            st.dataframe(insights["captains"], use_container_width=True, hide_index=True)
+        with col2:
+            st.markdown(f"**{chosen_label}'s differentials**")
+            st.dataframe(insights["differentials"], use_container_width=True, hide_index=True)
+
+        cap_impact = league_extras.captaincy_impact(league_squads, predictions, int(active_team_id))
+        if "error" not in cap_impact:
+            st.markdown(f"**Captaincy edge vs the field**")
+            edge = cap_impact["edge_vs_league"]
+            st.metric(
+                f"{chosen_label}'s captain: {cap_impact['my_captain']}",
+                f"{edge:+.2f} pts vs league-average captain",
+                delta=f"{edge:+.2f}",
+            )
+            st.caption(f"Most popular captain in the league: {cap_impact['most_popular']}")
+            with st.expander("Captaincy split across the league"):
+                st.dataframe(cap_impact["split"], use_container_width=True, hide_index=True)
+
+    with ml_tabs[2]:
+        st.subheader("Projected GW winner (⚠️ stale — based on last known picks)")
+        proj = league_projection.project_gw_winner(league_squads, standings, int(event))
+        st.dataframe(
+            proj[["projected_rank", "entry_name", "captain_name", "projected_gw_points", "projected_total", "rank_change"]],
+            use_container_width=True, hide_index=True,
+        )
+
+        st.subheader("Per-manager transfer suggestions (assumed bank = £0.0m)")
+        league_tx = league_projection.per_manager_transfer_suggestions(league_squads)
+        st.dataframe(league_tx.head(20) if not league_tx.empty else league_tx, use_container_width=True, hide_index=True)
+
+    with ml_tabs[3]:
+        banter = league_projection.banter_stats(league_squads, standings, insights)
+        st.subheader("Banter stats")
+        st.dataframe(banter["per_manager_stats"], use_container_width=True, hide_index=True)
+        st.caption(banter["known_gap"])
+        st.markdown("**Template adherence**")
+        st.dataframe(banter["template_adherence"], use_container_width=True, hide_index=True)
+
+        st.divider()
+        manager_hist = get_manager_hist(int(league_id))
+        form_n = st.slider("Recent form window (gameweeks)", 1, 10, 4)
+        form = league_extras.league_form(manager_hist, last_n=form_n)
+        st.markdown(f"**League form — last {form_n} gameweeks** (the cumulative table above hides who's closing in)")
+        st.dataframe(form, use_container_width=True, hide_index=True)
+        if not form.empty:
+            st.bar_chart(form.set_index("entry_name")["recent_points"], horizontal=True)
+
+    with ml_tabs[4]:
+        st.subheader("Head-to-head")
+        h2h_col1, h2h_col2 = st.columns(2)
+        h2h_a = h2h_col1.selectbox("Manager A", labels, index=default_idx, key="h2h_a")
+        h2h_b = h2h_col2.selectbox(
+            "Manager B", labels, index=min(1, len(labels) - 1) if len(labels) > 1 else 0, key="h2h_b",
+        )
+        if h2h_a and h2h_b and h2h_a != h2h_b:
+            h2h = league_extras.head_to_head(
+                league_squads, predictions, manager_options[h2h_a], manager_options[h2h_b],
+            )
+            if "error" in h2h:
+                st.warning(h2h["error"])
+            else:
+                st.caption(f"{h2h['shared_n']} of {h2h['squad_size']} players shared ({h2h['overlap_pct']:.0f}% overlap) — showing only the differences")
+                colA, colB = st.columns(2)
+                with colA:
+                    st.markdown(f"**Only {h2h['name_a']}** (captain: {h2h['captain_a']}) — {h2h['unique_pred_a']} pred pts")
+                    st.dataframe(h2h["only_a"], use_container_width=True, hide_index=True)
+                with colB:
+                    st.markdown(f"**Only {h2h['name_b']}** (captain: {h2h['captain_b']}) — {h2h['unique_pred_b']} pred pts")
+                    st.dataframe(h2h["only_b"], use_container_width=True, hide_index=True)
+                st.metric("Projected gap (A vs B, starters)", f"{h2h['projected_a'] - h2h['projected_b']:+.2f} pts")
+        elif h2h_a == h2h_b:
+            st.info("Pick two different managers to compare.")
+
+        st.divider()
+        st.subheader("Who owns this player?")
+        query = st.text_input("Player name (or part of it) — the mid-gameweek \"who has him?\" question")
+        if query:
+            owners = league_extras.player_owners(league_squads, query)
+            st.dataframe(owners, use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------------------- Chips ---
 with tabs[tab_idx["Chips"]]:

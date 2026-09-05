@@ -381,6 +381,23 @@ class MainWindow(QMainWindow):
         self.league_subtabs = QTabWidget()
         league_layout.addWidget(self.league_subtabs, stretch=1)
 
+        # 13 flat subtabs overflowed into scroll arrows; group them instead
+        # (GUI_PLAN 6.11: prevent overflow, don't style the scroller)
+        def _group(title: str) -> QTabWidget:
+            holder = QWidget()
+            lay = QVBoxLayout(holder)
+            lay.setContentsMargins(0, 8, 0, 0)
+            inner = QTabWidget()
+            lay.addWidget(inner)
+            self.league_subtabs.addTab(holder, title)
+            return inner
+
+        self.g_table = _group("Table")
+        self.g_squads = _group("Squads")
+        self.g_captaincy = _group("Captaincy")
+        self.g_projection = _group("Projections")
+        self.g_fun = _group("Fun Stats")
+
         def _table_page(caption: str) -> QTableWidget:
             page = QWidget()
             lay = QVBoxLayout(page)
@@ -395,11 +412,11 @@ class MainWindow(QMainWindow):
 
         page, self.standings_table = _table_page(
             "Full league standings — click any column header to sort")
-        self.league_subtabs.addTab(page, "Standings")
+        self.g_table.addTab(page, "Standings")
 
         page, self.ownership_table = _table_page(
             "Most-owned players in the league — this is the template you're measured against")
-        self.league_subtabs.addTab(page, "Template")
+        self.g_squads.addTab(page, "Template")
 
         page, self.captains_table = _table_page(
             "Who the league captained this gameweek — where the rank swings come from")
@@ -408,14 +425,14 @@ class MainWindow(QMainWindow):
         self.captaincy_note = QLabel("")
         self.captaincy_note.setWordWrap(True)
         page.layout().insertWidget(1, self.captaincy_note)
-        self.league_subtabs.addTab(page, "Captaincy")
+        self.g_captaincy.addTab(page, "Captaincy")
 
         page, self.differentials_table = _table_page(
             "Your differentials — players you own that most of the league doesn't")
-        self.league_subtabs.addTab(page, "Differentials")
+        self.g_squads.addTab(page, "Differentials")
 
         page, self.chips_table = _table_page("Chips played this gameweek")
-        self.league_subtabs.addTab(page, "Chips")
+        self.g_table.addTab(page, "Chips")
 
         # NOTE the caption: FPL hides other managers' picks until the deadline
         # passes, so this is built on their LAST KNOWN squad and is blind to
@@ -424,23 +441,23 @@ class MainWindow(QMainWindow):
         page, self.projection_table = _table_page(
             "Projected finish this gameweek — based on last known squads, "
             "so it cannot see transfers your rivals made this week")
-        self.league_subtabs.addTab(page, "Projection")
+        self.g_projection.addTab(page, "Projection")
 
         page, self.rival_transfers_table = _table_page(
             "Transfers your rivals should make (their weakest starter vs the "
             "best upgrade, assuming no money in the bank)")
-        self.league_subtabs.addTab(page, "Rival Moves")
+        self.g_projection.addTab(page, "Rival Moves")
 
         page, self.eo_table = _table_page(
             "Effective ownership — starting ownership plus an extra copy for every "
             "captain. This, not plain ownership, is what decides whether a pick "
             "gains or loses you rank")
-        self.league_subtabs.addTab(page, "Eff. Ownership")
+        self.g_squads.addTab(page, "Eff. Ownership")
 
         page, self.form_table = _table_page(
             "Form over the last 4 gameweeks — the cumulative standings hide who is "
             "actually coming for you")
-        self.league_subtabs.addTab(page, "Form")
+        self.g_table.addTab(page, "Form")
 
         # ---- head to head ----
         h2h_page = QWidget()
@@ -476,7 +493,7 @@ class MainWindow(QMainWindow):
         b_box.addWidget(self.h2h_b_table)
         h2h_tables.addLayout(b_box)
         h2h_layout.addLayout(h2h_tables, stretch=1)
-        self.league_subtabs.addTab(h2h_page, "Head to Head")
+        self.g_captaincy.addTab(h2h_page, "Head to Head")
 
         # ---- who owns ----
         owns_page = QWidget()
@@ -491,13 +508,9 @@ class MainWindow(QMainWindow):
         owns_layout.addLayout(owns_row)
         self.owners_table = QTableWidget()
         owns_layout.addWidget(self.owners_table, stretch=1)
-        self.league_subtabs.addTab(owns_page, "Who Owns")
+        self.g_squads.addTab(owns_page, "Who Owns")
 
-        fun_page = QWidget()
-        fun_layout = QVBoxLayout(fun_page)
-        fun_layout.setContentsMargins(0, 8, 0, 0)
-        self.fun_subtabs = QTabWidget()
-        fun_layout.addWidget(self.fun_subtabs)
+        self.fun_subtabs = self.g_fun
         for attr, label, caption in (
             ("bench_points_table", "Bench Points",
              "Points left rotting on the bench, season to date — luck, or bad picks?"),
@@ -511,7 +524,6 @@ class MainWindow(QMainWindow):
             sub_page, tbl = _table_page(caption)
             setattr(self, attr, tbl)
             self.fun_subtabs.addTab(sub_page, label)
-        self.league_subtabs.addTab(fun_page, "Fun Stats")
 
         # dedicated canvases for the league charts sub-tab (the global Charts
         # tab keeps its own -- a QWidget can only have one parent, so these
