@@ -265,12 +265,9 @@ def get_id_maps() -> tuple[dict, dict]:
 
 
 def player_image_path(element_id: int, team_id: int, position: str) -> Path | None:
-    player_code, team_code = get_id_maps()
-    code = player_code.get(int(element_id))
-    if code is not None:
-        path = fetch_assets.photo_path(code) or fetch_assets.ensure_photo(code)
-        if path is not None:
-            return path
+    """Team shirt only, like the official FPL app's squad view. No player
+    mugshots -- one of 20 standard kits, assigned by team."""
+    _, team_code = get_id_maps()
     tcode = team_code.get(int(team_id))
     if tcode is None:
         return None
