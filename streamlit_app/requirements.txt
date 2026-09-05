@@ -4,3 +4,4 @@ numpy
 requests
 lightgbm
 pulp
+matplotlib

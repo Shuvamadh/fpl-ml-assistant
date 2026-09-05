@@ -17,8 +17,29 @@ host's -- one shared app, everyone's own recommendations.
 import sys
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+
+# Streamlit's theme (light/dark/auto) is per-viewer and not reliably
+# detectable from the server side, so these charts use a transparent
+# background + a mid-gray that's legible against either light or dark page
+# backgrounds, rather than assuming one theme.
+TEXT_COL = "#888888"
+GRID_COL = "#888888"
+
+
+def _style_ax(ax):
+    ax.patch.set_alpha(0)
+    ax.figure.patch.set_alpha(0)
+    ax.tick_params(colors=TEXT_COL, labelsize=8)
+    ax.xaxis.label.set_color(TEXT_COL)
+    ax.yaxis.label.set_color(TEXT_COL)
+    ax.title.set_color(TEXT_COL)
+    for spine in ax.spines.values():
+        spine.set_color(GRID_COL)
+        spine.set_alpha(0.4)
+    ax.grid(axis="x", color=GRID_COL, linewidth=0.5, alpha=0.25)
 
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 if str(SRC_DIR) not in sys.path:
@@ -150,6 +171,79 @@ def money(v) -> str:
         return f"£{v:.1f}m"
     except (TypeError, ValueError):
         return "-"
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_model_mae() -> float:
+    """Measured backtest MAE, for honest uncertainty bands on predictions --
+    falls back to the documented value if backtest_results.csv is missing."""
+    path = Path(__file__).resolve().parent.parent / "data" / "backtest_results.csv"
+    try:
+        bt = pd.read_csv(path)
+        return float(bt["mae_model"].mean())
+    except Exception:
+        return 0.96
+
+
+def draw_captain_uncertainty(candidates: pd.DataFrame, mae: float):
+    """The GUI_PLAN chart audit's top finding: predictions rendered as bare
+    point estimates imply a precision the backtest doesn't support. If the
+    #1 vs #2 gap is smaller than the model's own MAE, they're a statistical
+    coin flip -- show that honestly instead of a confident ranked list."""
+    df = candidates.head(9).sort_values("pred_points_adj")
+    fig, ax = plt.subplots(figsize=(6, max(2.5, 0.4 * len(df))))
+    y = range(len(df))
+    ax.errorbar(
+        df["pred_points_adj"], y, xerr=mae, fmt="o", color="#ff4b4b",
+        ecolor="#888888", elinewidth=1.5, capsize=3, markersize=6,
+    )
+    ax.set_yticks(list(y))
+    ax.set_yticklabels(df["web_name"])
+    ax.set_xlabel(f"Predicted points (±{mae:.2f} MAE)")
+    leader = df["pred_points_adj"].max()
+    ax.axvspan(leader - mae, leader + mae, color="#ff4b4b", alpha=0.08)
+    _style_ax(ax)
+    fig.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+    in_range = (df["pred_points_adj"] >= leader - mae).sum()
+    if in_range > 1:
+        st.caption(
+            f"⚠️ The top **{in_range}** candidates are within one MAE of each other — "
+            f"statistically close to a coin flip. Worth breaking the tie on fixture "
+            f"difficulty or minutes certainty (start_probability) rather than trusting "
+            f"the ranking alone."
+        )
+
+
+def rotation_risk_table(df: pd.DataFrame) -> pd.DataFrame:
+    """M1 from the chart audit: start_probability (the classifier's P(minutes
+    >=60), AUC 0.95) is a far better rotation-risk signal than raw past
+    minutes, and nothing in the app surfaced it as a risk band before this."""
+    out = df.copy()
+    def band(p):
+        if pd.isna(p):
+            return "Unknown"
+        if p >= 0.9:
+            return "🟢 Nailed"
+        if p >= 0.5:
+            return "🟡 Probable"
+        return "🔴 Rotation risk"
+    out["risk"] = out["start_probability"].apply(band)
+    return out.sort_values("start_probability", ascending=True)
+
+
+def availability_triage(predictions: pd.DataFrame, squad_only_ids: set | None = None) -> pd.DataFrame:
+    """M2: a direct list of anyone flagged unavailable/doubtful who still
+    carries a meaningful predicted-points number -- the model doesn't always
+    know what the API's own status flag knows."""
+    df = predictions.copy()
+    flagged = df[(~df["status_ok"]) | (df["status"] == "d")]
+    if squad_only_ids is not None:
+        flagged = flagged[flagged["id"].isin(squad_only_ids)]
+    cols = ["web_name", "position", "name", "status", "chance_of_playing_next_round", "news", "pred_points_adj"]
+    cols = [c for c in cols if c in flagged.columns]
+    return flagged[cols].sort_values("pred_points_adj", ascending=False)
 
 
 # ------------------------------------------------------------------ sidebar ---
@@ -289,6 +383,35 @@ with tabs[tab_idx["My Squad"]]:
 
     st.bar_chart(xi.set_index("web_name")["pred_points_adj"], horizontal=True)
 
+    st.divider()
+    st.subheader("Captain shortlist — with honest uncertainty")
+    st.caption(
+        "A predicted-points ranking with no error bar implies more precision than "
+        "the model actually has. The band below is the model's own measured "
+        "backtest error (MAE), not a guess."
+    )
+    mae = get_model_mae()
+    draw_captain_uncertainty(xi, mae)
+
+    st.divider()
+    st.subheader("Rotation risk — who's actually nailed on")
+    st.caption(
+        "start_probability (a dedicated classifier, AUC 0.95) is a much better "
+        "signal than past minutes alone for who's actually going to play 60+."
+    )
+    if "start_probability" in squad.columns:
+        risk = rotation_risk_table(squad)
+        st.dataframe(
+            risk[["web_name", "position", "start_probability", "pred_points_adj", "risk"]],
+            use_container_width=True, hide_index=True,
+        )
+
+    triage = availability_triage(predictions, squad_only_ids=set(squad["element"]))
+    if not triage.empty:
+        st.warning(f"⚠️ {len(triage)} player(s) in your squad flagged unavailable/doubtful "
+                   f"by the API but still carrying meaningful predicted points:")
+        st.dataframe(triage, use_container_width=True, hide_index=True)
+
 # ------------------------------------------------------------ Squad Value ---
 with tabs[tab_idx["Squad Value"]]:
     st.subheader("Buy price -> real sell price (FPL's half-profit-on-rise rule applied)")
@@ -324,14 +447,78 @@ with tabs[tab_idx["All Players"]]:
     display_cols = [c for c in display_cols if c in df.columns]
     st.dataframe(df[display_cols].head(300), use_container_width=True, hide_index=True)
 
+    st.divider()
+    st.subheader("Differential finder")
+    st.caption(
+        "High predicted points at low ownership — the players a 3D scatter used to "
+        "gesture at, shown as a plain readable quadrant instead. Ownership on a log "
+        "scale since it's heavily right-skewed."
+    )
+    pool = predictions[(predictions["status_ok"]) & (predictions["minutes"] > 0)].copy()
+    pool["selected_by_percent"] = pd.to_numeric(pool["selected_by_percent"], errors="coerce")
+    pool = pool.dropna(subset=["selected_by_percent", "pred_points_adj"])
+    pool = pool[pool["selected_by_percent"] > 0]
+    if not pool.empty:
+        own_thresh = 5.0
+        pts_thresh = pool["pred_points_adj"].median()
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        ax.scatter(pool["selected_by_percent"], pool["pred_points_adj"], s=14, alpha=0.35, color="#888888")
+        diffs = pool[(pool["selected_by_percent"] < own_thresh) & (pool["pred_points_adj"] > pts_thresh)]
+        ax.scatter(diffs["selected_by_percent"], diffs["pred_points_adj"], s=40, color="#ff4b4b", zorder=3)
+        for _, row in diffs.nlargest(10, "pred_points_adj").iterrows():
+            ax.annotate(row["web_name"], (row["selected_by_percent"], row["pred_points_adj"]),
+                        color=TEXT_COL, fontsize=7, xytext=(4, 4), textcoords="offset points")
+        ax.set_xscale("log")
+        ax.axvline(own_thresh, color="#888888", linestyle="--", linewidth=0.8, alpha=0.5)
+        ax.axhline(pts_thresh, color="#888888", linestyle="--", linewidth=0.8, alpha=0.5)
+        ax.set_xlabel("Owned % (log scale)")
+        ax.set_ylabel("Predicted points")
+        ax.set_title(f"Red = differentials (<{own_thresh:.0f}% owned, above-median predicted points)")
+        _style_ax(ax)
+        fig.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
+        with st.expander(f"Differential list ({len(diffs)} players)"):
+            st.dataframe(
+                diffs[["web_name", "position", "name", "now_cost_m", "selected_by_percent", "pred_points_adj"]]
+                .sort_values("pred_points_adj", ascending=False),
+                use_container_width=True, hide_index=True,
+            )
+
+    st.divider()
+    st.subheader("Availability triage")
+    st.caption("Anyone flagged unavailable/doubtful by the API who still carries a meaningful "
+               "predicted-points number — the model doesn't always know what the status flag knows.")
+    pool_triage = availability_triage(predictions)
+    st.dataframe(pool_triage.head(30), use_container_width=True, hide_index=True)
+
 # ----------------------------------------------------------- Price Watch ---
 with tabs[tab_idx["Price Watch"]]:
     st.subheader("FPL's own transfer-momentum signal")
-    watch = predictions[predictions["price_flag"] != ""].sort_values(
-        "price_signal", key=lambda s: s.abs(), ascending=False
+    st.caption(
+        "Only ~30-45 players are ever flagged at a time out of 650+ -- this is a "
+        "watchlist for a small actionable set, not a chart over the whole pool."
     )
-    price_cols = ["web_name", "position", "name", "now_cost_m", "selected_by_percent", "price_flag", "price_change_percent"]
-    st.dataframe(watch[price_cols], use_container_width=True, hide_index=True)
+    price_cols = ["web_name", "position", "name", "now_cost_m", "selected_by_percent", "price_change_percent"]
+    my_ids = set(squad["element"])
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**🟢 Risers**")
+        risers = predictions[predictions["price_flag"] == "RISE"].sort_values(
+            "price_change_percent", ascending=False
+        )
+        risers = risers.assign(mine="")
+        risers.loc[risers["id"].isin(my_ids), "mine"] = "⭐ mine"
+        st.dataframe(risers[price_cols + ["mine"]].head(20), use_container_width=True, hide_index=True)
+    with col2:
+        st.markdown("**🔴 Fallers**")
+        fallers = predictions[predictions["price_flag"] == "FALL"].sort_values(
+            "price_change_percent", ascending=True
+        )
+        fallers = fallers.assign(mine="")
+        fallers.loc[fallers["id"].isin(my_ids), "mine"] = "⭐ mine"
+        st.dataframe(fallers[price_cols + ["mine"]].head(20), use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------------- Mini League ---
 with tabs[tab_idx["Mini League"]]:
