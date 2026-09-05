@@ -159,6 +159,18 @@ def load_minutes_classifier() -> lgb.Booster | None:
     return lgb.Booster(model_file=str(path)) if path.exists() else None
 
 
+def load_started_regressor() -> lgb.Booster | None:
+    """E[points | started] from train_model.train_two_stage() -- trained only
+    on minutes>=60 rows. `pred_points` (the joint model) already factors in
+    the chance a player doesn't start, which shrinks premiums relative to
+    what they'd score if guaranteed 90 minutes. This gives the "if he starts"
+    number separately so the UI can show both instead of only the shrunk one.
+    Optional: older model directories won't have this file yet.
+    """
+    path = MODEL_DIR / "points_regressor_started.txt"
+    return lgb.Booster(model_file=str(path)) if path.exists() else None
+
+
 def score_players(as_of: str = "frozen") -> pd.DataFrame:
     """Score every player for one upcoming gameweek.
 
@@ -217,14 +229,19 @@ def score_players(as_of: str = "frozen") -> pd.DataFrame:
 
     model = load_model()
     clf = load_minutes_classifier()
+    started_reg = load_started_regressor()
     if not feat.empty:
         feat["pred_points"] = model.predict(feat[FEATURE_COLS])
         feat["start_probability"] = clf.predict(feat[FEATURE_COLS]) if clf is not None else np.nan
+        feat["pred_points_if_starts"] = (
+            started_reg.predict(feat[FEATURE_COLS]) if started_reg is not None else np.nan
+        )
     else:
         feat["pred_points"] = np.nan
         feat["start_probability"] = np.nan
+        feat["pred_points_if_starts"] = np.nan
 
-    merge_cols = ["element", "pred_points", "start_probability", "season_gp_prior"]
+    merge_cols = ["element", "pred_points", "start_probability", "pred_points_if_starts", "season_gp_prior"]
     scored = players.merge(
         feat[merge_cols] if not feat.empty else pd.DataFrame(columns=merge_cols),
         left_on="id",
@@ -239,6 +256,8 @@ def score_players(as_of: str = "frozen") -> pd.DataFrame:
     scored.loc[fallback, "pred_points"] = scored.loc[fallback, "position"].map(median_by_pos)
     median_start_prob_by_pos = scored.loc[~fallback].groupby("position")["start_probability"].median()
     scored.loc[fallback, "start_probability"] = scored.loc[fallback, "position"].map(median_start_prob_by_pos)
+    median_if_starts_by_pos = scored.loc[~fallback].groupby("position")["pred_points_if_starts"].median()
+    scored.loc[fallback, "pred_points_if_starts"] = scored.loc[fallback, "position"].map(median_if_starts_by_pos)
 
     scored["now_cost_m"] = scored["now_cost"] / 10.0
     scored["status_ok"] = scored["status"] == "a"
@@ -249,6 +268,7 @@ def score_players(as_of: str = "frozen") -> pd.DataFrame:
     scored["fdr_next_n_mean"] = scored["fdr_next_n_mean"].fillna(3)
     scored["fdr_multiplier"] = scored["next_fdr"].round().map(FDR_ADJUSTMENT).fillna(1.0)
     scored["pred_points_adj"] = scored["pred_points"] * scored["fdr_multiplier"]
+    scored["pred_points_if_starts_adj"] = scored["pred_points_if_starts"] * scored["fdr_multiplier"]
 
     scored["value_ratio"] = scored["pred_points_adj"] / scored["now_cost_m"]
 
@@ -272,7 +292,8 @@ def score_players(as_of: str = "frozen") -> pd.DataFrame:
 
     keep_cols = [
         "id", "web_name", "position", "name", "team_id", "now_cost_m",
-        "pred_points", "start_probability", "next_fixture", "next_fdr", "fdr_next_n_mean",
+        "pred_points", "start_probability", "pred_points_if_starts", "pred_points_if_starts_adj",
+        "next_fixture", "next_fdr", "fdr_next_n_mean",
         "pred_points_adj", "value_ratio", "selected_by_percent", "status",
         "status_ok", "chance_of_playing_next_round", "form", "total_points",
         "minutes", "season_gp_prior", "ep_next", "defensive_contribution",

@@ -162,6 +162,36 @@ def value_scatter(ax, predictions: pd.DataFrame, palette=None, transparent=False
     return ax
 
 
+def value_by_position_box(ax, predictions: pd.DataFrame, palette=None, transparent=False):
+    """Points-per-million distribution split by position -- 'which position
+    is actually good value right now' isn't answerable from the value_scatter
+    (cost vs points) or the raw player table alone; a boxplot per position
+    makes the spread and the outliers visible at a glance."""
+    t = _p(palette)
+    if predictions is None or predictions.empty:
+        return _empty(ax, "No predictions", t)
+    df = predictions[predictions["status_ok"]].dropna(subset=["value_ratio", "position"])
+    if df.empty:
+        return _empty(ax, "No available players", t)
+    order = [p for p in ["GKP", "DEF", "MID", "FWD"] if p in df["position"].unique()]
+    groups = [df.loc[df["position"] == p, "value_ratio"].values for p in order]
+    bp = ax.boxplot(groups, tick_labels=order, patch_artist=True, showfliers=True,
+                     medianprops={"color": t["text"], "linewidth": 1.5},
+                     flierprops={"markersize": 3, "markeredgecolor": t["text_dim"], "alpha": 0.5})
+    for patch, pos in zip(bp["boxes"], order):
+        color = POSITION_COLORS.get(pos, t["accent"])
+        patch.set_facecolor(color)
+        patch.set_alpha(0.55)
+        patch.set_edgecolor(color)
+    for element in ("whiskers", "caps"):
+        for line in bp[element]:
+            line.set_color(t["text_dim"])
+    ax.set_ylabel("Points per GBPm")
+    ax.set_title("Value by position")
+    style_axes(ax, t, transparent=transparent)
+    return ax
+
+
 def differential_scatter(ax, predictions: pd.DataFrame, own_thresh: float = 5.0,
                          palette=None, transparent=False):
     """Low-owned players with above-median predicted points."""
@@ -435,6 +465,45 @@ def league_form_bar(ax, form: pd.DataFrame, last_n: int, palette=None, transpare
     ax.barh(df["entry_name"], df["recent_points"], color=SERIES[2])
     ax.set_xlabel(f"Points, last {last_n} GWs")
     ax.set_title(f"League form (last {last_n} gameweeks)")
+    style_axes(ax, t, transparent=transparent)
+    ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
+    ax.grid(axis="y", visible=False)
+    return ax
+
+
+def bench_points_lost_bar(ax, per_manager_stats: pd.DataFrame, palette=None, transparent=False):
+    """Total points left on the bench this season, per manager -- the
+    league_projection.banter_stats() output existed before the Nothing
+    redesign but had no chart (or any UI at all) wired to it. Red = worse
+    than the league median (more points wasted), green = better."""
+    t = _p(palette)
+    if per_manager_stats is None or per_manager_stats.empty:
+        return _empty(ax, "No bench data", t)
+    df = per_manager_stats.sort_values("total_bench_points_lost")
+    med = df["total_bench_points_lost"].median()
+    colors = [t["bad"] if v > med else t["good"] for v in df["total_bench_points_lost"]]
+    ax.barh(df["entry_name"], df["total_bench_points_lost"], color=colors)
+    ax.axvline(med, color=t["text_dim"], linewidth=0.8, linestyle="--", alpha=0.6)
+    ax.set_xlabel("Total points left on the bench")
+    ax.set_title("Bench points lost this season")
+    style_axes(ax, t, transparent=transparent)
+    ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
+    ax.grid(axis="y", visible=False)
+    return ax
+
+
+def squad_value_growth_bar(ax, per_manager_stats: pd.DataFrame, palette=None, transparent=False):
+    """Squad value growth since GW1 -- who's actually been good at price
+    rises vs who's sat still. Same banter_stats() source as the bench chart."""
+    t = _p(palette)
+    if per_manager_stats is None or per_manager_stats.empty:
+        return _empty(ax, "No value data", t)
+    df = per_manager_stats.sort_values("squad_value_growth")
+    colors = [t["good"] if v >= 0 else t["bad"] for v in df["squad_value_growth"]]
+    ax.barh(df["entry_name"], df["squad_value_growth"], color=colors)
+    ax.axvline(0, color=t["text_dim"], linewidth=0.8, alpha=0.6)
+    ax.set_xlabel("Squad value growth since GW1 (GBPm)")
+    ax.set_title("Who's actually grown their squad value")
     style_axes(ax, t, transparent=transparent)
     ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
     ax.grid(axis="y", visible=False)
