@@ -155,7 +155,7 @@ def value_scatter(ax, predictions: pd.DataFrame, palette=None, transparent=False
     for _, row in top.iterrows():
         ax.annotate(row["web_name"], (row["now_cost_m"], row["pred_points_adj"]),
                     color=t["text"], fontsize=7, xytext=(4, 4), textcoords="offset points")
-    ax.set_xlabel("Cost (GBP m)")
+    ax.set_xlabel("Cost (£m)")
     ax.set_ylabel("Predicted points")
     ax.set_title("Value hunting: cost vs predicted points")
     style_axes(ax, t, transparent=transparent)
@@ -186,7 +186,7 @@ def value_by_position_box(ax, predictions: pd.DataFrame, palette=None, transpare
     for element in ("whiskers", "caps"):
         for line in bp[element]:
             line.set_color(t["text_dim"])
-    ax.set_ylabel("Points per GBPm")
+    ax.set_ylabel("Points per £m")
     ax.set_title("Value by position")
     style_axes(ax, t, transparent=transparent)
     return ax
@@ -276,7 +276,7 @@ def value_3d(ax, predictions: pd.DataFrame, palette=None):
     colors = df["position"].map(POSITION_COLORS).fillna(t["text_dim"])
     ax.scatter(df["now_cost_m"], df["selected_by_percent"], df["pred_points_adj"],
                c=colors, s=18, alpha=0.7, depthshade=True)
-    ax.set_xlabel("Cost (GBP m)")
+    ax.set_xlabel("Cost (£m)")
     ax.set_ylabel("Owned %")
     ax.set_zlabel("Predicted pts")
     ax.set_title("Cost x Ownership x Predicted Points")
@@ -320,7 +320,7 @@ def squad_value_bars(ax, squad: pd.DataFrame, palette=None, transparent=False):
     ax.bar(x + width / 2, df["now_cost_m"], width, label="Now", color=t["accent2"])
     ax.set_xticks(x)
     ax.set_xticklabels(df["web_name"], rotation=60, ha="right", fontsize=7)
-    ax.set_ylabel("GBP m")
+    ax.set_ylabel("£m")
     ax.set_title("Squad value: bought vs current price")
     ax.legend(labelcolor=t["text"], edgecolor=t["border"], fontsize=8, framealpha=0)
     style_axes(ax, t, transparent=transparent)
@@ -502,7 +502,7 @@ def squad_value_growth_bar(ax, per_manager_stats: pd.DataFrame, palette=None, tr
     colors = [t["good"] if v >= 0 else t["bad"] for v in df["squad_value_growth"]]
     ax.barh(df["entry_name"], df["squad_value_growth"], color=colors)
     ax.axvline(0, color=t["text_dim"], linewidth=0.8, alpha=0.6)
-    ax.set_xlabel("Squad value growth since GW1 (GBPm)")
+    ax.set_xlabel("Squad value growth since GW1 (£m)")
     ax.set_title("Who's actually grown their squad value")
     style_axes(ax, t, transparent=transparent)
     ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)

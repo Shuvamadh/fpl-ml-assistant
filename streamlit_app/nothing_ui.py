@@ -192,7 +192,8 @@ html, body, [class*="css"] {{
 }}
 .n-tile .v {{
   font-family: 'Cinzel Decorative', serif; font-weight: 700;
-  font-size: 25px; line-height: 1; color: var(--n-text);
+  font-size: 19px; line-height: 1.15; color: var(--n-text);
+  white-space: nowrap;
 }}
 .n-tile .s {{ font-size: 10.5px; color: var(--n-dim); margin-top: 6px; }}
 .n-tile.accent {{ border-color: var(--n-accent); }}
@@ -314,7 +315,7 @@ html, body, [class*="css"] {{
 @media (max-width: 640px) {{
   .n-h1 {{ font-size: 22px; }}
   .n-tile {{ flex: 1 1 104px; min-width: 104px; padding: 11px 12px; }}
-  .n-tile .v {{ font-size: 20px; }}
+  .n-tile .v {{ font-size: 16px; }}
   .n-player {{ flex: 0 0 62px; }}
   .n-player .shirt {{ width: 36px; }}
 }}

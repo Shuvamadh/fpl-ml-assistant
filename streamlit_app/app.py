@@ -224,7 +224,7 @@ def shirt_b64(team_id, position) -> str | None:
 
 def money(v) -> str:
     try:
-        return f"GBP {float(v):.1f}m"
+        return f"£{float(v):.1f}m"
     except (TypeError, ValueError):
         return "-"
 
@@ -781,7 +781,7 @@ with tabs[T["Mini League"]]:
                         pms[["entry_name", "avg_bench_points_per_gw", "squad_value_growth", "gw_rank_swing"]]
                         .rename(columns={
                             "entry_name": "Manager", "avg_bench_points_per_gw": "Avg bench pts/GW",
-                            "squad_value_growth": "Value growth (GBPm)", "gw_rank_swing": "Rank swing this GW",
+                            "squad_value_growth": "Value growth (£m)", "gw_rank_swing": "Rank swing this GW",
                         }),
                         width="stretch", hide_index=True,
                     )
