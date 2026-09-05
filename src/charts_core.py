@@ -441,6 +441,45 @@ def league_form_bar(ax, form: pd.DataFrame, last_n: int, palette=None, transpare
     return ax
 
 
+def bench_points_lost_bar(ax, per_manager_stats: pd.DataFrame, palette=None, transparent=False):
+    """Total points left on the bench this season, per manager -- the
+    league_projection.banter_stats() output existed before the Nothing
+    redesign but had no chart (or any UI at all) wired to it. Red = worse
+    than the league median (more points wasted), green = better."""
+    t = _p(palette)
+    if per_manager_stats is None or per_manager_stats.empty:
+        return _empty(ax, "No bench data", t)
+    df = per_manager_stats.sort_values("total_bench_points_lost")
+    med = df["total_bench_points_lost"].median()
+    colors = [t["bad"] if v > med else t["good"] for v in df["total_bench_points_lost"]]
+    ax.barh(df["entry_name"], df["total_bench_points_lost"], color=colors)
+    ax.axvline(med, color=t["text_dim"], linewidth=0.8, linestyle="--", alpha=0.6)
+    ax.set_xlabel("Total points left on the bench")
+    ax.set_title("Bench points lost this season")
+    style_axes(ax, t, transparent=transparent)
+    ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
+    ax.grid(axis="y", visible=False)
+    return ax
+
+
+def squad_value_growth_bar(ax, per_manager_stats: pd.DataFrame, palette=None, transparent=False):
+    """Squad value growth since GW1 -- who's actually been good at price
+    rises vs who's sat still. Same banter_stats() source as the bench chart."""
+    t = _p(palette)
+    if per_manager_stats is None or per_manager_stats.empty:
+        return _empty(ax, "No value data", t)
+    df = per_manager_stats.sort_values("squad_value_growth")
+    colors = [t["good"] if v >= 0 else t["bad"] for v in df["squad_value_growth"]]
+    ax.barh(df["entry_name"], df["squad_value_growth"], color=colors)
+    ax.axvline(0, color=t["text_dim"], linewidth=0.8, alpha=0.6)
+    ax.set_xlabel("Squad value growth since GW1 (GBPm)")
+    ax.set_title("Who's actually grown their squad value")
+    style_axes(ax, t, transparent=transparent)
+    ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
+    ax.grid(axis="y", visible=False)
+    return ax
+
+
 # ------------------------------------------------------------------ model ---
 
 def backtest_mae(ax, backtest_df: pd.DataFrame, palette=None, transparent=False):

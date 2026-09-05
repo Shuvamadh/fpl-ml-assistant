@@ -670,7 +670,7 @@ with tabs[T["Mini League"]]:
         my_row = standings[standings["entry"] == int(active_team_id)]
         my_entry_name = my_row.iloc[0]["entry_name"] if not my_row.empty else ""
 
-        ml = st.tabs(["Table", "Ownership", "Projections", "Form", "Head-to-head"])
+        ml = st.tabs(["Table", "Ownership", "Projections", "Form", "Head-to-head", "Banter"])
 
         with ml[0]:
             st.dataframe(
@@ -758,6 +758,39 @@ with tabs[T["Mini League"]]:
                 if q:
                     st.dataframe(league_extras.player_owners(league_squads, q),
                                  width="stretch", hide_index=True)
+
+        with ml[5]:
+            if league_squads.empty:
+                st.caption("No squad data for this gameweek.")
+            else:
+                try:
+                    banter = league_projection.banter_stats(league_squads, standings, insights)
+                except Exception as e:
+                    st.error(f"Couldn't build banter stats: {e}")
+                    banter = {"per_manager_stats": pd.DataFrame(), "template_adherence": pd.DataFrame()}
+                pms = banter["per_manager_stats"]
+                if pms.empty:
+                    st.caption("Not enough history yet -- comes alive after a few gameweeks.")
+                else:
+                    fig1(chart(charts_core.bench_points_lost_bar, pms), height=4.0)
+                    fig1(chart(charts_core.squad_value_growth_bar, pms), height=4.0)
+                    st.dataframe(
+                        pms[["entry_name", "avg_bench_points_per_gw", "squad_value_growth", "gw_rank_swing"]]
+                        .rename(columns={
+                            "entry_name": "Manager", "avg_bench_points_per_gw": "Avg bench pts/GW",
+                            "squad_value_growth": "Value growth (GBPm)", "gw_rank_swing": "Rank swing this GW",
+                        }),
+                        width="stretch", hide_index=True,
+                    )
+                ta = banter["template_adherence"]
+                if not ta.empty:
+                    st.markdown(ui.rule("Template adherence"), unsafe_allow_html=True)
+                    st.caption(f"Out of {ta['template_size'].iloc[0]} template players (>=50% owned in this league).")
+                    st.dataframe(
+                        ta[["entry_name", "template_players_owned"]]
+                        .rename(columns={"entry_name": "Manager", "template_players_owned": "Template players owned"}),
+                        width="stretch", hide_index=True,
+                    )
 
 
 # ================================================================== CHIPS ===
