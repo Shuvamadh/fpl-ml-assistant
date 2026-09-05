@@ -419,13 +419,28 @@ with tabs[T["This Week"]]:
 
     st.markdown(ui.rule("Decisions"), unsafe_allow_html=True)
     d1, d2 = st.columns(2)
+    def _pts_line(row) -> str:
+        """'7.8 if he starts · 94% · 7.3 expected' -- pred_points_adj alone
+        looks low for premiums because it already factors in the chance they
+        don't start; showing both numbers instead of just the shrunk one.
+        The two numbers come from separately-trained models (joint vs.
+        started-only) that occasionally disagree on nailed players -- when
+        that happens "if starts" can come out below "expected", which reads
+        as nonsense, so fall back to the single number rather than show it."""
+        if_starts = row.get("pred_points_if_starts_adj")
+        p = row.get("start_probability")
+        adj = row["pred_points_adj"]
+        if pd.isna(if_starts) or pd.isna(p) or if_starts < adj:
+            return f"{adj:.1f} pts"
+        return f"{if_starts:.1f} if he starts &middot; {p * 100:.0f}% &middot; {adj:.1f} expected"
+
     with d1:
         gap = float(cap["pred_points_adj"]) - float(vice["pred_points_adj"])
         coin = gap < MAE
         st.markdown(ui.card(
             "Captain",
             f"{cap['web_name']}",
-            f"{cap['pred_points_adj']:.1f} pts vs {cap.get('next_fixture', '?')} "
+            f"{_pts_line(cap)} vs {cap.get('next_fixture', '?')} "
             f"(FDR {cap.get('next_fdr', '?')})<br>"
             + (f"Only {gap:.2f} pts clear of {vice['web_name']} -- inside the model's "
                f"+/-{MAE:.2f} MAE, so this is close to a coin flip."
@@ -436,7 +451,7 @@ with tabs[T["This Week"]]:
     with d2:
         st.markdown(ui.card(
             "Vice-captain", f"{vice['web_name']}",
-            f"{vice['pred_points_adj']:.1f} pts vs {vice.get('next_fixture', '?')}",
+            f"{_pts_line(vice)} vs {vice.get('next_fixture', '?')}",
         ), unsafe_allow_html=True)
 
     d3, d4 = st.columns(2)
