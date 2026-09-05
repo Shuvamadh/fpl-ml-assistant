@@ -79,7 +79,15 @@ def get_active_picks_event() -> tuple[int, bool]:
 
 @st.cache_data(ttl=1800, show_spinner="Scoring ~650 players (live data pull)...")
 def get_predictions() -> pd.DataFrame:
-    return predict.score_players()
+    df = predict.score_players()
+    # recommend.py/chips.py/league_projection.py all read predictions back
+    # from this file rather than taking a DataFrame directly (same contract
+    # the desktop GUI's data_bridge.py relies on) -- has to actually be
+    # written, not just returned, or every squad/transfer/chip call below
+    # fails on a fresh deploy with no pre-existing file on disk.
+    predict.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(predict.DATA_DIR / "player_predictions.csv", index=False)
+    return df
 
 
 @st.cache_data(ttl=1800, show_spinner="Loading league standings...")
