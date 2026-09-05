@@ -53,7 +53,15 @@ GUI_DIR = Path(__file__).resolve().parent.parent / "gui"
 if str(GUI_DIR) not in sys.path:
     sys.path.insert(0, str(GUI_DIR))
 
+# assets/fetch_assets.py is pure requests, no Qt -- reused directly for
+# club badges and player photos.
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+if str(ASSETS_DIR) not in sys.path:
+    sys.path.insert(0, str(ASSETS_DIR))
+
 import lightgbm as lgb
+
+import fetch_assets
 
 import chips
 import fpl_api
@@ -246,6 +254,58 @@ def availability_triage(predictions: pd.DataFrame, squad_only_ids: set | None = 
     return flagged[cols].sort_values("pred_points_adj", ascending=False)
 
 
+@st.cache_resource(show_spinner=False)
+def get_id_maps() -> tuple[dict, dict]:
+    """element id -> player code, team id -> team code. Needed because
+    predictions carry FPL ids but the CDN filenames are keyed by codes."""
+    bs = fpl_api.bootstrap_static()
+    player_code = {e["id"]: e["code"] for e in bs["elements"]}
+    team_code = {t["id"]: t["code"] for t in bs["teams"]}
+    return player_code, team_code
+
+
+def player_image_path(element_id: int, team_id: int, position: str) -> Path | None:
+    player_code, team_code = get_id_maps()
+    code = player_code.get(int(element_id))
+    if code is not None:
+        path = fetch_assets.photo_path(code) or fetch_assets.ensure_photo(code)
+        if path is not None:
+            return path
+    tcode = team_code.get(int(team_id))
+    if tcode is None:
+        return None
+    return fetch_assets.shirt_path(tcode, is_gk=(position == "GKP"))
+
+
+def team_badge_path(team_id: int) -> Path | None:
+    _, team_code = get_id_maps()
+    tcode = team_code.get(int(team_id))
+    return fetch_assets.badge_path(tcode) if tcode is not None else None
+
+
+def draw_player_grid(df: pd.DataFrame, cols_per_row: int = 5):
+    """Card grid: photo/shirt, badge, name, cost, predicted points."""
+    rows = [df.iloc[i:i + cols_per_row] for i in range(0, len(df), cols_per_row)]
+    for row_df in rows:
+        cols = st.columns(cols_per_row)
+        for col, (_, player) in zip(cols, row_df.iterrows()):
+            with col:
+                img_path = player_image_path(player["element" if "element" in player else "id"],
+                                              player.get("team_id"), player.get("position"))
+                if img_path is not None:
+                    st.image(str(img_path), use_container_width=True)
+                badge_path = team_badge_path(player.get("team_id"))
+                cap = " (C)" if player.get("is_captain") else (" (V)" if player.get("is_vice_captain") else "")
+                if badge_path is not None:
+                    b1, b2 = st.columns([1, 4])
+                    b1.image(str(badge_path), width=24)
+                    b2.markdown(f"**{player['web_name']}{cap}**")
+                else:
+                    st.markdown(f"**{player['web_name']}{cap}**")
+                st.caption(f"{player.get('position', '')} | {money(player.get('now_cost_m'))}")
+                st.caption(f"{player.get('pred_points_adj', 0):.1f} pts")
+
+
 # ------------------------------------------------------------------ sidebar ---
 
 st.sidebar.title("⚽ FPL ML Assistant")
@@ -371,10 +431,19 @@ with tabs[tab_idx["My Squad"]]:
     show_cols = ["web_name", "position", "name", "now_cost_m", "pred_points_adj",
                  "start_probability", "next_fixture", "next_fdr"]
     show_cols = [c for c in show_cols if c in xi.columns]
+    view = st.radio("View", ["Grid", "Table"], horizontal=True, label_visibility="collapsed")
+
     st.subheader("Starting XI")
-    st.dataframe(xi[show_cols], use_container_width=True, hide_index=True)
+    if view == "Grid":
+        draw_player_grid(xi)
+    else:
+        st.dataframe(xi[show_cols], use_container_width=True, hide_index=True)
+
     st.subheader("Bench")
-    st.dataframe(bench[show_cols], use_container_width=True, hide_index=True)
+    if view == "Grid":
+        draw_player_grid(bench)
+    else:
+        st.dataframe(bench[show_cols], use_container_width=True, hide_index=True)
 
     cap, vice = xi.iloc[0], xi.iloc[1]
     st.info(f"**Captain:** {cap['web_name']} vs {cap.get('next_fixture', '?')} "
