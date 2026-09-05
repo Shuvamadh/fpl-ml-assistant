@@ -1,0 +1,20 @@
+# Nothing-inspired theme. Streamlit's own theme is what paints the chrome it
+# doesn't let CSS reach (widget internals, the top bar), so it's set to the
+# Black colourway here to match the app's default. The in-app Theme control
+# restyles everything else at runtime via nothing_ui.css().
+[theme]
+base = "dark"
+primaryColor = "#D71921"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0A0A0A"
+textColor = "#FFFFFF"
+font = "sans serif"
+
+[server]
+# ~120MB of historical CSV/parquet lives in data/ for the offline training
+# pipeline. The live app never reads it, so don't let the file watcher walk it.
+folderWatchBlacklist = ["data", "assets", "models"]
+maxUploadSize = 5
+
+[browser]
+gatherUsageStats = false
