@@ -1,0 +1,55 @@
+name: Retrain model
+
+# The GBDT itself doesn't need second-by-second updates -- it learns general
+# patterns from completed gameweeks, not moment-to-moment state (live
+# predictions already refresh on every page load via the FPL API directly,
+# independent of this). What's worth automating is keeping the trained
+# model current as new gameweeks/seasons complete, without needing anyone's
+# PC on. Runs weekly, plus on-demand via the Actions tab.
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # every Monday 06:00 UTC -- after the weekend's gameweek(s)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        # scoped to what the training pipeline actually needs -- skips
+        # PySide6/matplotlib from the root requirements.txt (those are for
+        # the desktop GUI, not training, and PySide6 is slow to install on
+        # a bare CI runner for no benefit here)
+        run: pip install pandas numpy scikit-learn lightgbm requests pyarrow scipy
+
+      - name: Pull latest historical gameweek data
+        run: python src/collect_history.py
+        working-directory: .
+
+      - name: Rebuild feature table
+        run: python src/features.py
+
+      - name: Retrain model (single-stage + two-stage classifier)
+        run: python src/train_model.py
+
+      - name: Refresh validation reports
+        run: python src/backtest.py
+        continue-on-error: true  # nice-to-have charts, not worth failing the whole run over
+
+      - name: Commit updated model/data if anything changed
+        run: |
+          git config user.name "fpl-ml-assistant-bot"
+          git config user.email "actions@github.com"
+          git add data/history_gws.csv data/features.parquet models/ data/backtest_results.csv data/rolling_origin_results.csv
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Automated weekly retrain ($(date -u +%Y-%m-%d))"
+          git push
