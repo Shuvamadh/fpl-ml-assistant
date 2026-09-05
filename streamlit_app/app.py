@@ -264,7 +264,7 @@ def get_id_maps() -> tuple[dict, dict]:
     return player_code, team_code
 
 
-def player_image_path(element_id: int, team_id: int, position: str) -> Path | None:
+def player_image_path(team_id: int, position: str) -> Path | None:
     """Team shirt only, like the official FPL app's squad view. No player
     mugshots -- one of 20 standard kits, assigned by team."""
     _, team_code = get_id_maps()
@@ -281,21 +281,26 @@ def team_badge_path(team_id: int) -> Path | None:
 
 
 def draw_player_grid(df: pd.DataFrame, cols_per_row: int = 5):
-    """Card grid: photo/shirt, badge, name, cost, predicted points."""
+    """Card grid: shirt, badge, name, cost, predicted points. Fixed pixel
+    widths throughout (not use_container_width) because Streamlit collapses
+    st.columns to a single stacked column below its mobile breakpoint
+    regardless of cols_per_row -- a container-width image would then blow up
+    to full phone width instead of staying a small icon."""
     rows = [df.iloc[i:i + cols_per_row] for i in range(0, len(df), cols_per_row)]
     for row_df in rows:
         cols = st.columns(cols_per_row)
         for col, (_, player) in zip(cols, row_df.iterrows()):
             with col:
-                img_path = player_image_path(player["element" if "element" in player else "id"],
-                                              player.get("team_id"), player.get("position"))
+                team_id = player.get("team_id")
+                team_id = None if pd.isna(team_id) else team_id
+                img_path = player_image_path(team_id, player.get("position")) if team_id is not None else None
                 if img_path is not None:
-                    st.image(str(img_path), use_container_width=True)
-                badge_path = team_badge_path(player.get("team_id"))
+                    st.image(str(img_path), width=100)
+                badge_path = team_badge_path(team_id) if team_id is not None else None
                 cap = " (C)" if player.get("is_captain") else (" (V)" if player.get("is_vice_captain") else "")
                 if badge_path is not None:
                     b1, b2 = st.columns([1, 4])
-                    b1.image(str(badge_path), width=24)
+                    b1.image(str(badge_path), width=20)
                     b2.markdown(f"**{player['web_name']}{cap}**")
                 else:
                     st.markdown(f"**{player['web_name']}{cap}**")
@@ -443,9 +448,9 @@ with tabs[tab_idx["My Squad"]]:
         st.dataframe(bench[show_cols], use_container_width=True, hide_index=True)
 
     cap, vice = xi.iloc[0], xi.iloc[1]
-    st.info(f"**Captain:** {cap['web_name']} vs {cap.get('next_fixture', '?')} "
+    st.info(f"**Suggested captain:** {cap['web_name']} vs {cap.get('next_fixture', '?')} "
             f"(FDR {cap.get('next_fdr', '?')}), {cap['pred_points_adj']:.1f} pts\n\n"
-            f"**Vice:** {vice['web_name']} vs {vice.get('next_fixture', '?')}, {vice['pred_points_adj']:.1f} pts")
+            f"**Suggested vice:** {vice['web_name']} vs {vice.get('next_fixture', '?')}, {vice['pred_points_adj']:.1f} pts")
 
     st.bar_chart(xi.set_index("web_name")["pred_points_adj"], horizontal=True)
 
