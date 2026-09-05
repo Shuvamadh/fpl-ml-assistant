@@ -617,6 +617,9 @@ with tabs[T["Players"]]:
                         "next_fixture", "next_fdr", "status", "price_flag"] if c in df.columns]
     st.dataframe(df[cols].head(300), width="stretch", hide_index=True)
 
+    st.markdown(ui.rule("Value by position"), unsafe_allow_html=True)
+    fig1(chart(charts_core.value_by_position_box, predictions), height=4.0)
+
     st.markdown(ui.rule("Compare"), unsafe_allow_html=True)
     picks = st.multiselect(
         "Players to compare", predictions["web_name"].tolist(),

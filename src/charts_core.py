@@ -162,6 +162,36 @@ def value_scatter(ax, predictions: pd.DataFrame, palette=None, transparent=False
     return ax
 
 
+def value_by_position_box(ax, predictions: pd.DataFrame, palette=None, transparent=False):
+    """Points-per-million distribution split by position -- 'which position
+    is actually good value right now' isn't answerable from the value_scatter
+    (cost vs points) or the raw player table alone; a boxplot per position
+    makes the spread and the outliers visible at a glance."""
+    t = _p(palette)
+    if predictions is None or predictions.empty:
+        return _empty(ax, "No predictions", t)
+    df = predictions[predictions["status_ok"]].dropna(subset=["value_ratio", "position"])
+    if df.empty:
+        return _empty(ax, "No available players", t)
+    order = [p for p in ["GKP", "DEF", "MID", "FWD"] if p in df["position"].unique()]
+    groups = [df.loc[df["position"] == p, "value_ratio"].values for p in order]
+    bp = ax.boxplot(groups, tick_labels=order, patch_artist=True, showfliers=True,
+                     medianprops={"color": t["text"], "linewidth": 1.5},
+                     flierprops={"markersize": 3, "markeredgecolor": t["text_dim"], "alpha": 0.5})
+    for patch, pos in zip(bp["boxes"], order):
+        color = POSITION_COLORS.get(pos, t["accent"])
+        patch.set_facecolor(color)
+        patch.set_alpha(0.55)
+        patch.set_edgecolor(color)
+    for element in ("whiskers", "caps"):
+        for line in bp[element]:
+            line.set_color(t["text_dim"])
+    ax.set_ylabel("Points per GBPm")
+    ax.set_title("Value by position")
+    style_axes(ax, t, transparent=transparent)
+    return ax
+
+
 def differential_scatter(ax, predictions: pd.DataFrame, own_thresh: float = 5.0,
                          palette=None, transparent=False):
     """Low-owned players with above-median predicted points."""
