@@ -280,32 +280,50 @@ def team_badge_path(team_id: int) -> Path | None:
     return fetch_assets.badge_path(tcode) if tcode is not None else None
 
 
-def draw_player_grid(df: pd.DataFrame, cols_per_row: int = 5):
-    """Card grid: shirt, badge, name, cost, predicted points. Fixed pixel
-    widths throughout (not use_container_width) because Streamlit collapses
-    st.columns to a single stacked column below its mobile breakpoint
-    regardless of cols_per_row -- a container-width image would then blow up
-    to full phone width instead of staying a small icon."""
-    rows = [df.iloc[i:i + cols_per_row] for i in range(0, len(df), cols_per_row)]
-    for row_df in rows:
-        cols = st.columns(cols_per_row)
-        for col, (_, player) in zip(cols, row_df.iterrows()):
-            with col:
-                team_id = player.get("team_id")
-                team_id = None if pd.isna(team_id) else team_id
-                img_path = player_image_path(team_id, player.get("position")) if team_id is not None else None
-                if img_path is not None:
-                    st.image(str(img_path), width=100)
-                badge_path = team_badge_path(team_id) if team_id is not None else None
-                cap = " (C)" if player.get("is_captain") else (" (V)" if player.get("is_vice_captain") else "")
-                if badge_path is not None:
-                    b1, b2 = st.columns([1, 4])
-                    b1.image(str(badge_path), width=20)
-                    b2.markdown(f"**{player['web_name']}{cap}**")
-                else:
-                    st.markdown(f"**{player['web_name']}{cap}**")
-                st.caption(f"{player.get('position', '')} | {money(player.get('now_cost_m'))}")
-                st.caption(f"{player.get('pred_points_adj', 0):.1f} pts")
+@st.cache_data(show_spinner=False)
+def _img_b64(path_str: str) -> str:
+    import base64
+    return base64.b64encode(Path(path_str).read_bytes()).decode("ascii")
+
+
+def draw_player_grid(df: pd.DataFrame):
+    """Card grid built from raw HTML/CSS flexbox, not st.columns.
+
+    st.columns always collapses to a single full-width stacked column below
+    Streamlit's mobile breakpoint, no matter how many columns are requested,
+    which turns a "grid" into one giant card per row on a phone. A flexbox
+    with flex-wrap instead reflows naturally: more cards per row on a wide
+    screen, fewer on a narrow one, never fewer than what fits, and never a
+    forced single column. Images are inlined as base64 data URIs so this
+    doesn't depend on Streamlit's own static file serving.
+    """
+    cards = []
+    for _, player in df.iterrows():
+        team_id = player.get("team_id")
+        team_id = None if pd.isna(team_id) else team_id
+        img_path = player_image_path(team_id, player.get("position")) if team_id is not None else None
+        badge_path = team_badge_path(team_id) if team_id is not None else None
+        cap = " (C)" if player.get("is_captain") else (" (V)" if player.get("is_vice_captain") else "")
+
+        img_html = f'<img src="data:image/png;base64,{_img_b64(str(img_path))}" style="width:64px;height:auto;">' if img_path else ""
+        badge_html = f'<img src="data:image/png;base64,{_img_b64(str(badge_path))}" style="width:16px;height:16px;vertical-align:middle;margin-right:4px;">' if badge_path else ""
+
+        # No leading whitespace on any line: Markdown treats 4+ spaces of
+        # indentation as an indented code block, which silently broke every
+        # card after the first when this was written as readable/indented
+        # HTML. Single-line, no leading spaces, or it renders as literal text.
+        name_line = f'<div style="margin-top:4px;font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{badge_html}{player["web_name"]}{cap}</div>'
+        pos_line = f'<div style="font-size:11px;opacity:0.7;">{player.get("position", "")} | {money(player.get("now_cost_m"))}</div>'
+        pts_line = f'<div style="font-size:11px;opacity:0.7;">{player.get("pred_points_adj", 0):.1f} pts</div>'
+        cards.append(
+            f'<div style="flex:0 0 100px;text-align:center;padding:6px;">'
+            f'{img_html}{name_line}{pos_line}{pts_line}</div>'
+        )
+
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;gap:4px;">{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ------------------------------------------------------------------ sidebar ---
