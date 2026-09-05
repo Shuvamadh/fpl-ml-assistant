@@ -69,7 +69,12 @@ from features import FEATURE_COLS
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 
-st.set_page_config(page_title="FPL ML Assistant", page_icon="⚽", layout="wide")
+_ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "fpl.ico"
+st.set_page_config(
+    page_title="FPL ML Assistant",
+    page_icon=str(_ICON_PATH) if _ICON_PATH.exists() else "⚽",
+    layout="wide",
+)
 
 DEFAULT_LEAGUE_ID = 1766517
 DEFAULT_TEAM_ID = 8041052
@@ -208,12 +213,7 @@ def draw_captain_uncertainty(candidates: pd.DataFrame, mae: float):
     plt.close(fig)
     in_range = (df["pred_points_adj"] >= leader - mae).sum()
     if in_range > 1:
-        st.caption(
-            f"⚠️ The top **{in_range}** candidates are within one MAE of each other — "
-            f"statistically close to a coin flip. Worth breaking the tie on fixture "
-            f"difficulty or minutes certainty (start_probability) rather than trusting "
-            f"the ranking alone."
-        )
+        st.caption(f"Top {in_range} candidates are within one MAE of each other.")
 
 
 def rotation_risk_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -269,7 +269,7 @@ st.sidebar.caption(f"League: **{league_name}**")
 manager_options = {}
 if not standings.empty:
     for _, row in standings.sort_values("rank").iterrows():
-        label = f"{row['player_name']} — {row['entry_name']}"
+        label = f"{row['player_name']} ({row['entry_name']})"
         manager_options[label] = int(row["entry"])
 
 default_label = next((k for k, v in manager_options.items() if v == DEFAULT_TEAM_ID), None)
@@ -378,27 +378,18 @@ with tabs[tab_idx["My Squad"]]:
 
     cap, vice = xi.iloc[0], xi.iloc[1]
     st.info(f"**Captain:** {cap['web_name']} vs {cap.get('next_fixture', '?')} "
-            f"(FDR {cap.get('next_fdr', '?')}) — {cap['pred_points_adj']:.1f} pts\n\n"
-            f"**Vice:** {vice['web_name']} vs {vice.get('next_fixture', '?')} — {vice['pred_points_adj']:.1f} pts")
+            f"(FDR {cap.get('next_fdr', '?')}), {cap['pred_points_adj']:.1f} pts\n\n"
+            f"**Vice:** {vice['web_name']} vs {vice.get('next_fixture', '?')}, {vice['pred_points_adj']:.1f} pts")
 
     st.bar_chart(xi.set_index("web_name")["pred_points_adj"], horizontal=True)
 
     st.divider()
-    st.subheader("Captain shortlist — with honest uncertainty")
-    st.caption(
-        "A predicted-points ranking with no error bar implies more precision than "
-        "the model actually has. The band below is the model's own measured "
-        "backtest error (MAE), not a guess."
-    )
+    st.subheader("Captain shortlist")
     mae = get_model_mae()
     draw_captain_uncertainty(xi, mae)
 
     st.divider()
-    st.subheader("Rotation risk — who's actually nailed on")
-    st.caption(
-        "start_probability (a dedicated classifier, AUC 0.95) is a much better "
-        "signal than past minutes alone for who's actually going to play 60+."
-    )
+    st.subheader("Rotation risk")
     if "start_probability" in squad.columns:
         risk = rotation_risk_table(squad)
         st.dataframe(
@@ -408,13 +399,12 @@ with tabs[tab_idx["My Squad"]]:
 
     triage = availability_triage(predictions, squad_only_ids=set(squad["element"]))
     if not triage.empty:
-        st.warning(f"⚠️ {len(triage)} player(s) in your squad flagged unavailable/doubtful "
-                   f"by the API but still carrying meaningful predicted points:")
+        st.warning(f"{len(triage)} player(s) flagged unavailable or doubtful")
         st.dataframe(triage, use_container_width=True, hide_index=True)
 
 # ------------------------------------------------------------ Squad Value ---
 with tabs[tab_idx["Squad Value"]]:
-    st.subheader("Buy price -> real sell price (FPL's half-profit-on-rise rule applied)")
+    st.subheader("Buy price to sell price")
     value_cols = ["web_name", "buy_price_m", "now_cost_m", "sell_price_m", "profit_m"]
     st.dataframe(
         squad[value_cols].sort_values("profit_m", ascending=False),
@@ -423,10 +413,10 @@ with tabs[tab_idx["Squad Value"]]:
 
 # ------------------------------------------------------------- Transfers ---
 with tabs[tab_idx["Transfers"]]:
-    st.subheader("Suggested upgrades within real sellable budget")
+    st.subheader("Suggested upgrades")
     tx = recommend.suggest_transfers(squad, meta["bank"])
     if tx.empty:
-        st.success("No clear upgrades found within budget — squad looks efficient per the model.")
+        st.success("No clear upgrades found within budget.")
     else:
         st.dataframe(tx, use_container_width=True, hide_index=True)
 
@@ -449,11 +439,6 @@ with tabs[tab_idx["All Players"]]:
 
     st.divider()
     st.subheader("Differential finder")
-    st.caption(
-        "High predicted points at low ownership — the players a 3D scatter used to "
-        "gesture at, shown as a plain readable quadrant instead. Ownership on a log "
-        "scale since it's heavily right-skewed."
-    )
     pool = predictions[(predictions["status_ok"]) & (predictions["minutes"] > 0)].copy()
     pool["selected_by_percent"] = pd.to_numeric(pool["selected_by_percent"], errors="coerce")
     pool = pool.dropna(subset=["selected_by_percent", "pred_points_adj"])
@@ -473,7 +458,7 @@ with tabs[tab_idx["All Players"]]:
         ax.axhline(pts_thresh, color="#888888", linestyle="--", linewidth=0.8, alpha=0.5)
         ax.set_xlabel("Owned % (log scale)")
         ax.set_ylabel("Predicted points")
-        ax.set_title(f"Red = differentials (<{own_thresh:.0f}% owned, above-median predicted points)")
+        ax.set_title(f"Red = differentials (under {own_thresh:.0f}% owned, above-median predicted points)")
         _style_ax(ax)
         fig.tight_layout()
         st.pyplot(fig, use_container_width=True)
@@ -487,18 +472,12 @@ with tabs[tab_idx["All Players"]]:
 
     st.divider()
     st.subheader("Availability triage")
-    st.caption("Anyone flagged unavailable/doubtful by the API who still carries a meaningful "
-               "predicted-points number — the model doesn't always know what the status flag knows.")
     pool_triage = availability_triage(predictions)
     st.dataframe(pool_triage.head(30), use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------------- Price Watch ---
 with tabs[tab_idx["Price Watch"]]:
-    st.subheader("FPL's own transfer-momentum signal")
-    st.caption(
-        "Only ~30-45 players are ever flagged at a time out of 650+ -- this is a "
-        "watchlist for a small actionable set, not a chart over the whole pool."
-    )
+    st.subheader("Price watch")
     price_cols = ["web_name", "position", "name", "now_cost_m", "selected_by_percent", "price_change_percent"]
     my_ids = set(squad["element"])
 
@@ -530,9 +509,7 @@ with tabs[tab_idx["Mini League"]]:
     with ml_tabs[0]:
         st.subheader(f"{league_name} standings")
         if IS_LIVE_GW:
-            st.caption(f"🔴 GW{event} is live — event_total/total below update in "
-                       f"near-real-time as matches are played (FPL computes this "
-                       f"server-side, not this app).")
+            st.caption(f"GW{event} is live. Points update in near-real-time.")
         st.dataframe(
             standings[["rank", "entry_name", "player_name", "event_total", "total"]],
             use_container_width=True, hide_index=True,
@@ -541,12 +518,7 @@ with tabs[tab_idx["Mini League"]]:
 
     with ml_tabs[1]:
         eo = league_extras.effective_ownership(league_squads)
-        st.subheader("Effective ownership (EO)")
-        st.caption(
-            "Plain ownership hides the number that actually matters: a player owned "
-            "50% but captained by 40% behaves like 90% ownership, since captained "
-            "copies score double. Ranked by EO, not raw ownership."
-        )
+        st.subheader("Effective ownership")
         st.dataframe(
             eo[["web_name", "position", "owned_pct", "captained_n", "eo_pct", "template_risk"]].head(20),
             use_container_width=True, hide_index=True,
@@ -574,14 +546,15 @@ with tabs[tab_idx["Mini League"]]:
                 st.dataframe(cap_impact["split"], use_container_width=True, hide_index=True)
 
     with ml_tabs[2]:
-        st.subheader("Projected GW winner (⚠️ stale — based on last known picks)")
+        st.subheader("Projected GW winner")
+        st.caption("Based on last known picks, may be stale.")
         proj = league_projection.project_gw_winner(league_squads, standings, int(event))
         st.dataframe(
             proj[["projected_rank", "entry_name", "captain_name", "projected_gw_points", "projected_total", "rank_change"]],
             use_container_width=True, hide_index=True,
         )
 
-        st.subheader("Per-manager transfer suggestions (assumed bank = £0.0m)")
+        st.subheader("Per-manager transfer suggestions")
         league_tx = league_projection.per_manager_transfer_suggestions(league_squads)
         st.dataframe(league_tx.head(20) if not league_tx.empty else league_tx, use_container_width=True, hide_index=True)
 
@@ -597,7 +570,7 @@ with tabs[tab_idx["Mini League"]]:
         manager_hist = get_manager_hist(int(league_id))
         form_n = st.slider("Recent form window (gameweeks)", 1, 10, 4)
         form = league_extras.league_form(manager_hist, last_n=form_n)
-        st.markdown(f"**League form — last {form_n} gameweeks** (the cumulative table above hides who's closing in)")
+        st.markdown(f"**League form, last {form_n} gameweeks**")
         st.dataframe(form, use_container_width=True, hide_index=True)
         if not form.empty:
             st.bar_chart(form.set_index("entry_name")["recent_points"], horizontal=True)
@@ -616,13 +589,13 @@ with tabs[tab_idx["Mini League"]]:
             if "error" in h2h:
                 st.warning(h2h["error"])
             else:
-                st.caption(f"{h2h['shared_n']} of {h2h['squad_size']} players shared ({h2h['overlap_pct']:.0f}% overlap) — showing only the differences")
+                st.caption(f"{h2h['shared_n']} of {h2h['squad_size']} players shared ({h2h['overlap_pct']:.0f}% overlap)")
                 colA, colB = st.columns(2)
                 with colA:
-                    st.markdown(f"**Only {h2h['name_a']}** (captain: {h2h['captain_a']}) — {h2h['unique_pred_a']} pred pts")
+                    st.markdown(f"**Only {h2h['name_a']}** (captain: {h2h['captain_a']}), {h2h['unique_pred_a']} pred pts")
                     st.dataframe(h2h["only_a"], use_container_width=True, hide_index=True)
                 with colB:
-                    st.markdown(f"**Only {h2h['name_b']}** (captain: {h2h['captain_b']}) — {h2h['unique_pred_b']} pred pts")
+                    st.markdown(f"**Only {h2h['name_b']}** (captain: {h2h['captain_b']}), {h2h['unique_pred_b']} pred pts")
                     st.dataframe(h2h["only_b"], use_container_width=True, hide_index=True)
                 st.metric("Projected gap (A vs B, starters)", f"{h2h['projected_a'] - h2h['projected_b']:+.2f} pts")
         elif h2h_a == h2h_b:
@@ -630,7 +603,7 @@ with tabs[tab_idx["Mini League"]]:
 
         st.divider()
         st.subheader("Who owns this player?")
-        query = st.text_input("Player name (or part of it) — the mid-gameweek \"who has him?\" question")
+        query = st.text_input("Player name")
         if query:
             owners = league_extras.player_owners(league_squads, query)
             st.dataframe(owners, use_container_width=True, hide_index=True)
@@ -643,7 +616,7 @@ with tabs[tab_idx["Chips"]]:
     bd = chips.detect_blank_double_gameweeks()
     flagged = bd[bd["is_blank"] | bd["is_double"]]
     if flagged.empty:
-        st.info("No blank/double gameweeks detected in the next 5 GWs — normal fixture schedule ahead.")
+        st.info("No blank or double gameweeks detected in the next 5 GWs.")
     else:
         st.warning("Blank/double gameweeks ahead:")
         st.dataframe(flagged, use_container_width=True, hide_index=True)
@@ -721,137 +694,84 @@ if AI_AVAILABLE:
 # ------------------------------------------------------------ Model Details ---
 with tabs[tab_idx["Model Details"]]:
     st.header("How the predictions are made")
+    st.markdown("**Model:** LightGBM, regression, predicts points for one upcoming gameweek.")
 
+    st.subheader("Features")
     st.markdown(
-        "**Model**: LightGBM (gradient-boosted decision trees), regression objective, "
-        "predicting a player's FPL points in a single upcoming gameweek."
+        "All rolling/expanding windows are leak-free (shifted before that gameweek).\n\n"
+        "- **Form:** rolling 3 and 5 gameweek averages of points, minutes, BPS, ICT, "
+        "expected goal involvement, expected goals conceded, goals, assists, clean sheets\n"
+        "- **Season-to-date:** expanding mean points and games played\n"
+        "- **Last game:** points and minutes\n"
+        "- **Fixture:** real venue, both teams' recent scoring/conceding rate\n"
+        "- **Player:** cost, position"
     )
-
-    st.subheader("Features (what the model actually sees before a gameweek is played)")
-    st.markdown(
-        "Every feature below is deliberately **leak-free**: rolling/expanding windows "
-        "are shifted so a row only ever uses information available *strictly before* "
-        "that gameweek kicked off.\n\n"
-        "- **Form**: rolling 3- and 5-gameweek averages of points, minutes, BPS, ICT "
-        "index, expected goal involvement, expected goals conceded, goals, assists, "
-        "clean sheets\n"
-        "- **Season-to-date**: expanding mean points and games played so far this season\n"
-        "- **Most recent game**: last gameweek's points and minutes\n"
-        "- **Fixture context**: real next-fixture home/away venue, and *both* teams' "
-        "recent scoring/conceding rate — own team **and** opponent, recovered from "
-        "the fixture list itself rather than an external team-strength table (robust to "
-        "promoted/relegated clubs shifting team IDs between seasons)\n"
-        "- **Player**: cost, position"
-    )
-    with st.expander("See the exact feature list"):
+    with st.expander("Full feature list"):
         st.code("\n".join(FEATURE_COLS))
 
-    st.subheader("Feature importance (from the trained model)")
+    st.subheader("Feature importance")
     model_path = MODEL_DIR / "points_model.txt"
     if model_path.exists():
         booster = lgb.Booster(model_file=str(model_path))
         imp = pd.Series(booster.feature_importance(importance_type="gain"), index=FEATURE_COLS)
         imp = imp.sort_values(ascending=False).head(15)
         st.bar_chart(imp, horizontal=True)
-        st.caption(
-            "Minutes/starts dominate — as expected, rotation risk is the single "
-            "biggest driver of FPL point variance, more than underlying quality stats. "
-            "That's also why there's a separate start_probability column elsewhere in "
-            "this app: a dedicated classifier for \"will they play\" turned out to be "
-            "excellent (AUC 0.95) even though naively combining it with the points "
-            "regressor did not beat this single model (see below)."
-        )
+        st.caption("Minutes and starts dominate. Rotation risk is the biggest driver of point variance.")
     else:
-        st.info("models/points_model.txt not found in this deployment.")
+        st.info("models/points_model.txt not found.")
 
-    st.subheader("Validated three ways, not one")
+    st.subheader("Validation")
     st.markdown(
-        "1. **Season holdout**: train on all other seasons, predict an entirely unseen "
-        "one. MAE **0.964** vs **1.059** for a naive \"career average\" baseline.\n\n"
-        "2. **Walk-forward validation**: expanding-window retrain through a season, "
-        "predicting 5-gameweek blocks ahead each time, never looking forward — "
-        "simulates exactly how the model gets used in production. Overall MAE **0.954**, "
-        "and — the important part — accuracy *improves* as the season "
-        "progresses, the correct signature of a model actually using accumulating "
-        "in-season signal rather than overfitting to history.\n\n"
-        "3. **Rolling-origin cross-season CV**: train on strictly-earlier seasons only, "
-        "validate on each of the last 4 seasons in turn, to check whether the "
-        "season-holdout number is stable or a lucky draw. Result: mean MAE 0.997, std "
-        "0.047 — stable, and the model beats the naive baseline in every single "
-        "season tested, not just on average."
+        "1. **Season holdout:** MAE 0.964 vs 1.059 for a naive career-average baseline.\n"
+        "2. **Walk-forward:** expanding retrain through a season, predicting 5 GWs "
+        "ahead each time. Overall MAE 0.954. Accuracy improves as the season progresses.\n"
+        "3. **Rolling-origin CV:** trained on strictly earlier seasons, validated on "
+        "each of the last 4. Mean MAE 0.997, std 0.047. Beats naive in every season."
     )
 
     backtest_path = DATA_DIR / "backtest_results.csv"
     if backtest_path.exists():
         bt = pd.read_csv(backtest_path)
-        st.markdown("**Walk-forward MAE by gameweek** (lower is better; model vs naive baseline)")
+        st.markdown("**Walk-forward MAE by gameweek**")
         st.line_chart(bt.set_index("GW")[["mae_model", "mae_naive"]])
     else:
-        st.info("data/backtest_results.csv not found in this deployment.")
+        st.info("data/backtest_results.csv not found.")
 
     rolling_path = DATA_DIR / "rolling_origin_results.csv"
     if rolling_path.exists():
         ro = pd.read_csv(rolling_path)
-        st.markdown("**Rolling-origin cross-season CV** (each bar = train on strictly-earlier seasons, validate on that season)")
+        st.markdown("**Rolling-origin CV by season**")
         st.bar_chart(ro.set_index("val_season")[["mae_model", "mae_naive"]])
     else:
-        st.info("data/rolling_origin_results.csv not found in this deployment.")
+        st.info("data/rolling_origin_results.csv not found.")
 
-    st.subheader("The honest metrics, not just MAE")
+    st.subheader("Honest metrics")
     st.markdown(
-        "Raw MAE is dominated by the ~55-60% of rows that are non-playing (0 minutes, "
-        "0 points) and trivially easy to get right. Segmented by actual minutes played "
-        "on the held-out season: **0-min MAE ≈ 0.33**, **1-59min MAE ≈ 1.17**, "
-        "**60+min (started) MAE ≈ 2.35** — the last one is the real difficulty, "
-        "and the number that actually matters for lineup decisions.\n\n"
-        "Decision-quality metrics (what the app actually does with these predictions "
-        "— ranking and picking, not just minimizing an average error):\n"
-        "- **Within-gameweek Spearman rank correlation ≈ 0.72** — how well the "
-        "model *orders* players, which is what picking and captaining actually needs, "
-        "more than absolute error\n"
-        "- **Captain lift over the pool average**: the model's top captain pick "
-        "consistently outscores an average player in the pool by several points per "
-        "gameweek\n"
-        "- **Unconstrained top-11-by-model vs top-11-by-points-per-game**: the model's "
-        "ranking beats the simplest baseline a manager could use with no tool at all"
+        "Raw MAE is dominated by non-playing rows (0 minutes, 0 points). Segmented "
+        "by actual minutes: 0 min MAE 0.33, 1 to 59 min MAE 1.17, 60+ min MAE 2.35. "
+        "The last one is the real difficulty.\n\n"
+        "Decision metrics:\n"
+        "- Within-gameweek Spearman rank correlation: 0.72\n"
+        "- Captain lift over pool average: several points per gameweek\n"
+        "- Top-11-by-model vs top-11-by-points-per-game: model wins"
     )
 
-    st.subheader("Two honest negative-ish findings, reported rather than hidden")
-    with st.expander("1. Opponent-strength features and the is_home fix barely moved the headline MAE"):
+    st.subheader("Two findings reported as measured")
+    with st.expander("Opponent strength and is_home fix barely moved MAE"):
         st.markdown(
-            "Aggregate MAE barely moved (0.963 → 0.964, statistically "
-            "indistinguishable) after adding trained opponent-strength features and "
-            "fixing a real bug where every prediction was computed as if the player "
-            "were always at home. Both fixes were still the right calls — a known "
-            "systematic bug is worth fixing regardless of whether it moves the headline "
-            "number, and a principled trained signal beats an arbitrary hand-tuned one "
-            "even at parity — but a controlled per-position check confirmed FPL's "
-            "own fixture-difficulty rating has close to **zero** measured correlation "
-            "with predicted points, even controlling for position. This matches a known "
-            "critique in the wider FPL analytics community: FDR is a coarse "
-            "team-strength proxy that ignores injuries, tactical matchups, and "
-            "individual role, and its marginal predictive power for a single gameweek "
-            "is genuinely weak once a player's own form/quality is accounted for."
+            "MAE moved from 0.963 to 0.964 after adding trained opponent-strength "
+            "features and fixing a bug where every prediction assumed home advantage. "
+            "Both fixes were still correct to make. A per-position check found FPL's "
+            "own fixture difficulty rating has close to zero correlation with "
+            "predicted points, even controlling for position."
         )
-    with st.expander("2. The two-stage (hurdle) model was tried and didn't beat the single model"):
+    with st.expander("Two-stage model tried, didn't beat the single model"):
         st.markdown(
-            "Split the prediction into a P(minutes≥60) classifier and an "
-            "E[points | started] regressor, motivated by feature importance suggesting "
-            "the single model is mostly a will-he-play classifier wearing a regressor's "
-            "clothes. The classifier alone is genuinely excellent (**AUC 0.950**), and "
-            "the regressor beats a same-rows-only naive baseline on started rows (MAE "
-            "2.337 vs 2.502). But the naive combination — P(started) × "
-            "E[points|started] + (1-P(started)) × flat_baseline — has "
-            "**worse** overall MAE (1.018) than the single joint model (0.964): a flat "
-            "constant for the \"didn't start\" case is cruder than what the single "
-            "model already learns implicitly by conditioning continuously on form. The "
-            "single-stage model stayed the production predictor; the classifier's "
-            "P(started) is exposed separately as the start_probability column since "
-            "it's a genuinely useful rotation-risk signal on its own, just not a better "
-            "points predictor when naively combined."
+            "Split into a P(minutes >= 60) classifier and a points regressor. "
+            "Classifier AUC 0.950. Regressor beats a matched naive baseline on "
+            "started rows (2.337 vs 2.502). Combined MAE was 1.018, worse than the "
+            "single model's 0.964. Kept the single model for points. The classifier "
+            "is exposed separately as start_probability."
         )
 
-    st.caption(
-        "Full technical writeup, gotchas, and file-by-file pipeline docs in this "
-        "project's README.md."
-    )
+    st.caption("Full writeup in README.md.")
