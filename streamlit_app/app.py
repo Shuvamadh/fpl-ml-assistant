@@ -120,22 +120,22 @@ def get_predictions(as_of: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=1800, show_spinner="Loading league standings...")
+@st.cache_data(ttl=1800, max_entries=50, show_spinner="Loading league standings...")
 def get_standings(league_id: int) -> pd.DataFrame:
     return mini_league.league_standings(league_id)
 
 
-@st.cache_data(ttl=1800, show_spinner="Pulling every manager's squad...")
+@st.cache_data(ttl=1800, max_entries=50, show_spinner="Pulling every manager's squad...")
 def get_league_squads(league_id: int, event: int) -> pd.DataFrame:
     return mini_league.build_league_squads(get_standings(league_id), event)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=1800, max_entries=50, show_spinner=False)
 def get_league_insights(league_id: int, event: int, my_entry_id: int) -> dict:
     return mini_league.league_insights(get_league_squads(league_id, event), my_entry_id)
 
 
-@st.cache_data(ttl=600, show_spinner="Loading squad...")
+@st.cache_data(ttl=600, max_entries=50, show_spinner="Loading squad...")
 def get_squad(team_id: int, event: int):
     squad, meta = recommend.load_squad(team_id, event)
     sv = squad_value_mod.squad_value_report(team_id, squad)
@@ -145,7 +145,7 @@ def get_squad(team_id: int, event: int):
     return squad, meta
 
 
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=90, max_entries=50, show_spinner=False)
 def get_live_score(_squad: pd.DataFrame, event: int, team_id: int) -> dict:
     """Short TTL: this genuinely changes during matches. _squad is
     underscore-prefixed so Streamlit skips hashing a 15-row frame on every
@@ -153,7 +153,7 @@ def get_live_score(_squad: pd.DataFrame, event: int, team_id: int) -> dict:
     return recommend.live_squad_score(_squad, event)
 
 
-@st.cache_data(ttl=1800, show_spinner="Pulling GW-by-GW history for every manager...")
+@st.cache_data(ttl=1800, max_entries=50, show_spinner="Pulling GW-by-GW history for every manager...")
 def get_manager_hist(league_id: int) -> pd.DataFrame:
     """One row per (manager, gameweek). Same shape as the desktop
     data_bridge._manager_gw_history, reimplemented rather than imported since
