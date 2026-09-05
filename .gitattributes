@@ -1,0 +1,8 @@
+# LightGBM model files are text-shaped but must be byte-exact -- CRLF
+# conversion on a Windows checkout silently corrupts them (confirmed: a
+# fresh `git clone` on this machine produced a 794726-byte file from a
+# 789205-byte blob, and LightGBM then fails with "Model format error").
+models/*.txt binary
+
+# Parquet/CSV data files: also exact-byte, never worth line-ending mangling.
+*.parquet binary
