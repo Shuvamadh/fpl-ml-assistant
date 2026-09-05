@@ -108,6 +108,93 @@ CHIPS_COLS = [
     ("active_chip", "Chip", None),
 ]
 
+PROJECTION_COLS = [
+    ("projected_rank", "Proj Rank", None),
+    ("entry_name", "Team", None),
+    ("player_name", "Manager", None),
+    ("captain_name", "Captain", None),
+    ("projected_gw_points", "Proj GW Pts", lambda v: f"{v:.1f}"),
+    ("projected_total", "Proj Total", lambda v: f"{v:.0f}"),
+    ("current_rank", "Now", None),
+    ("rank_change", "Move", lambda v: ("+" if v > 0 else "") + f"{v:.0f}" if pd.notna(v) else "-"),
+]
+
+RIVAL_TRANSFER_COLS = [
+    ("entry_name", "Team", None),
+    ("out", "Weakest Starter", None),
+    ("out_pred", "Their Pred", lambda v: f"{v:.2f}" if pd.notna(v) else "-"),
+    ("in", "Best Upgrade", None),
+    ("in_pred", "Upgrade Pred", lambda v: f"{v:.2f}" if pd.notna(v) else "-"),
+    ("pred_gain", "Gain", lambda v: f"+{v:.2f}" if pd.notna(v) else "-"),
+]
+
+TC_COLS = [
+    ("web_name", "Player", None),
+    ("position", "Pos", None),
+    ("name", "Club", None),
+    ("pred_points_adj", "Pred Pts", lambda v: f"{v:.2f}"),
+    ("is_dgw", "DGW", lambda v: "Yes" if v else "-"),
+    ("tc_gain_vs_normal_captain", "Gain vs Normal Capt", lambda v: f"{v:+.2f}"),
+]
+
+OPTIMAL_SQUAD_COLS = [
+    ("web_name", "Player", None),
+    ("position", "Pos", None),
+    ("name", "Club", None),
+    ("now_cost_m", "Cost", lambda v: f"£{v:.1f}m"),
+    ("pred_points_adj", "Pred Pts", lambda v: f"{v:.2f}"),
+]
+
+BENCH_POINTS_COLS = [
+    ("entry_name", "Team", None),
+    ("bench_points", "Bench Pts Lost", None),
+]
+
+VALUE_GROWTH_COLS = [
+    ("entry_name", "Team", None),
+    ("value_growth_m", "Value Growth", lambda v: f"{'+' if v > 0 else ''}£{v:.1f}m"),
+]
+
+RANK_SWING_COLS = [
+    ("entry_name", "Team", None),
+    ("rank_swing", "Biggest GW Rank Swing", lambda v: f"{v:,.0f}" if pd.notna(v) else "-"),
+]
+
+EO_COLS = [
+    ("web_name", "Player", None),
+    ("position", "Pos", None),
+    ("owned_n", "Owned By", None),
+    ("owned_pct", "Owned %", lambda v: f"{v:.0f}%"),
+    ("captained_n", "Captained By", None),
+    ("eo_pct", "Effective Own %", lambda v: f"{v:.0f}%"),
+    ("template_risk", "Verdict", None),
+]
+
+FORM_COLS = [
+    ("entry_name", "Team", None),
+    ("recent_points", "Last 4 GW Pts", None),
+    ("bench_wasted", "Bench Pts Wasted", None),
+]
+
+H2H_COLS = [
+    ("web_name", "Player", None),
+    ("position", "Pos", None),
+    ("pred_points_adj", "Pred Pts", lambda v: f"{v:.2f}"),
+]
+
+OWNERS_COLS = [
+    ("web_name", "Player", None),
+    ("entry_name", "Manager", None),
+    ("role", "Role", None),
+]
+
+TEMPLATE_COLS = [
+    ("entry_name", "Team", None),
+    ("template_count", "Template Players", None),
+    ("template_pct", "Template %", lambda v: f"{v:.0f}%"),
+    ("differentials_owned", "Differentials", None),
+]
+
 
 def stat_card(label: str, value: str, small_value: bool = False) -> QFrame:
     """small_value=True for cards holding a name rather than a number -- at
@@ -316,6 +403,11 @@ class MainWindow(QMainWindow):
 
         page, self.captains_table = _table_page(
             "Who the league captained this gameweek — where the rank swings come from")
+        # captaincy is the single biggest source of rank movement, so the useful
+        # line is the edge against the field, not just the raw split
+        self.captaincy_note = QLabel("")
+        self.captaincy_note.setWordWrap(True)
+        page.layout().insertWidget(1, self.captaincy_note)
         self.league_subtabs.addTab(page, "Captaincy")
 
         page, self.differentials_table = _table_page(
@@ -324,6 +416,102 @@ class MainWindow(QMainWindow):
 
         page, self.chips_table = _table_page("Chips played this gameweek")
         self.league_subtabs.addTab(page, "Chips")
+
+        # NOTE the caption: FPL hides other managers' picks until the deadline
+        # passes, so this is built on their LAST KNOWN squad and is blind to
+        # transfers made this week. Saying so is the difference between a
+        # forecast and a lie.
+        page, self.projection_table = _table_page(
+            "Projected finish this gameweek — based on last known squads, "
+            "so it cannot see transfers your rivals made this week")
+        self.league_subtabs.addTab(page, "Projection")
+
+        page, self.rival_transfers_table = _table_page(
+            "Transfers your rivals should make (their weakest starter vs the "
+            "best upgrade, assuming no money in the bank)")
+        self.league_subtabs.addTab(page, "Rival Moves")
+
+        page, self.eo_table = _table_page(
+            "Effective ownership — starting ownership plus an extra copy for every "
+            "captain. This, not plain ownership, is what decides whether a pick "
+            "gains or loses you rank")
+        self.league_subtabs.addTab(page, "Eff. Ownership")
+
+        page, self.form_table = _table_page(
+            "Form over the last 4 gameweeks — the cumulative standings hide who is "
+            "actually coming for you")
+        self.league_subtabs.addTab(page, "Form")
+
+        # ---- head to head ----
+        h2h_page = QWidget()
+        h2h_layout = QVBoxLayout(h2h_page)
+        h2h_layout.setContentsMargins(0, 8, 0, 0)
+        h2h_controls = QHBoxLayout()
+        h2h_controls.addWidget(QLabel("Compare:"))
+        self.h2h_a = QComboBox()
+        self.h2h_b = QComboBox()
+        for cb in (self.h2h_a, self.h2h_b):
+            cb.setMinimumWidth(180)
+            cb.currentIndexChanged.connect(self._update_h2h)
+        h2h_controls.addWidget(self.h2h_a)
+        h2h_controls.addWidget(QLabel("vs"))
+        h2h_controls.addWidget(self.h2h_b)
+        h2h_controls.addStretch()
+        h2h_layout.addLayout(h2h_controls)
+        self.h2h_summary = QLabel("Refresh with a League ID set to compare managers.")
+        self.h2h_summary.setObjectName("SubHeader")
+        self.h2h_summary.setWordWrap(True)
+        h2h_layout.addWidget(self.h2h_summary)
+        h2h_tables = QHBoxLayout()
+        a_box = QVBoxLayout()
+        self.h2h_a_label = QLabel("Only in A")
+        a_box.addWidget(self.h2h_a_label)
+        self.h2h_a_table = QTableWidget()
+        a_box.addWidget(self.h2h_a_table)
+        h2h_tables.addLayout(a_box)
+        b_box = QVBoxLayout()
+        self.h2h_b_label = QLabel("Only in B")
+        b_box.addWidget(self.h2h_b_label)
+        self.h2h_b_table = QTableWidget()
+        b_box.addWidget(self.h2h_b_table)
+        h2h_tables.addLayout(b_box)
+        h2h_layout.addLayout(h2h_tables, stretch=1)
+        self.league_subtabs.addTab(h2h_page, "Head to Head")
+
+        # ---- who owns ----
+        owns_page = QWidget()
+        owns_layout = QVBoxLayout(owns_page)
+        owns_layout.setContentsMargins(0, 8, 0, 0)
+        owns_row = QHBoxLayout()
+        owns_row.addWidget(QLabel("Player:"))
+        self.owns_input = QLineEdit()
+        self.owns_input.setPlaceholderText("e.g. Haaland — who in the league has him?")
+        self.owns_input.textChanged.connect(self._update_owners)
+        owns_row.addWidget(self.owns_input, stretch=1)
+        owns_layout.addLayout(owns_row)
+        self.owners_table = QTableWidget()
+        owns_layout.addWidget(self.owners_table, stretch=1)
+        self.league_subtabs.addTab(owns_page, "Who Owns")
+
+        fun_page = QWidget()
+        fun_layout = QVBoxLayout(fun_page)
+        fun_layout.setContentsMargins(0, 8, 0, 0)
+        self.fun_subtabs = QTabWidget()
+        fun_layout.addWidget(self.fun_subtabs)
+        for attr, label, caption in (
+            ("bench_points_table", "Bench Points",
+             "Points left rotting on the bench, season to date — luck, or bad picks?"),
+            ("value_growth_table", "Value Growth",
+             "Squad value change since GW1 — who is actually good at price rises"),
+            ("rank_swings_table", "Rank Swings",
+             "Biggest single-gameweek move in overall FPL rank"),
+            ("template_table", "Template",
+             "How closely each manager hugs the template, and who owns real differentials"),
+        ):
+            sub_page, tbl = _table_page(caption)
+            setattr(self, attr, tbl)
+            self.fun_subtabs.addTab(sub_page, label)
+        self.league_subtabs.addTab(fun_page, "Fun Stats")
 
         # dedicated canvases for the league charts sub-tab (the global Charts
         # tab keeps its own -- a QWidget can only have one parent, so these
@@ -388,6 +576,49 @@ class MainWindow(QMainWindow):
         self.carousel.finalize()
         charts_layout.addWidget(self.carousel)
         self.tabs.addTab(charts_tab, "Charts")
+
+        # ---- Chips ----
+        chips_tab = QWidget()
+        chips_layout = QVBoxLayout(chips_tab)
+        chips_layout.setContentsMargins(16, 16, 16, 16)
+        self.chip_status = QLabel("Run a refresh to compute chip strategy.")
+        self.chip_status.setObjectName("SubHeader")
+        self.chip_status.setWordWrap(True)
+        chips_layout.addWidget(self.chip_status)
+
+        self.chip_subtabs = QTabWidget()
+        chips_layout.addWidget(self.chip_subtabs, stretch=1)
+
+        page, self.wildcard_table = _table_page(
+            "Best wildcard squad — optimised over the next 5 gameweeks, because "
+            "a wildcard is permanent")
+        self.chip_subtabs.addTab(page, "Wildcard")
+
+        page, self.freehit_table = _table_page(
+            "Best free-hit squad — optimised for ONE gameweek only; it is close "
+            "to wasted outside a blank or double gameweek")
+        self.chip_subtabs.addTab(page, "Free Hit")
+
+        page, self.tc_table = _table_page(
+            "Triple captain targets — ranked by gain over the captain you'd have "
+            "picked anyway, not by raw points")
+        self.chip_subtabs.addTab(page, "Triple Captain")
+
+        bb_page = QWidget()
+        bb_layout = QVBoxLayout(bb_page)
+        bb_layout.setContentsMargins(0, 8, 0, 0)
+        self.bench_boost_label = QLabel("-")
+        self.bench_boost_label.setWordWrap(True)
+        bb_layout.addWidget(self.bench_boost_label)
+        bb_layout.addStretch()
+        self.chip_subtabs.addTab(bb_page, "Bench Boost")
+
+        page, self.bgw_dgw_table = _table_page(
+            "Blank and double gameweeks ahead — this is what makes a Free Hit or "
+            "Bench Boost worth playing")
+        self.chip_subtabs.addTab(page, "Blanks / Doubles")
+
+        self.tabs.addTab(chips_tab, "Chips")
 
         ai_tab = QWidget()
         ai_layout = QVBoxLayout(ai_tab)
@@ -484,6 +715,9 @@ class MainWindow(QMainWindow):
         cap_id = xi.iloc[0]["id"] if "id" in xi and len(xi) else None
         vice_id = xi.iloc[1]["id"] if "id" in xi and len(xi) > 1 else None
         self.pitch_view.update_squad(xi, bench, cap_id, vice_id)
+
+        self._populate_chips(data.get("chips"))
+        self._populate_league_extras(data)
         fill_table(self.value_table, squad.sort_values("profit_m", ascending=False), VALUE_COLS)
 
         if transfers is not None and not transfers.empty:
@@ -632,6 +866,197 @@ class MainWindow(QMainWindow):
                 | df["name"].str.lower().str.contains(text, na=False)
             ]
         fill_table(self.all_players_table, df.head(300), ALL_PLAYERS_COLS, row_color_col="price_flag")
+
+    # ----------------------------------------------------------- chips ---
+
+    @staticmethod
+    def _clear_table(table):
+        table.clear()
+        table.setRowCount(0)
+        table.setColumnCount(0)
+
+    def _populate_chips(self, chips_data):
+        if not chips_data:
+            self.chip_status.setText("Chip strategy unavailable.")
+            return
+        if "error" in chips_data:
+            # most likely the ILP solver dependency is missing
+            self.chip_status.setText(
+                f"Chip optimisation unavailable: {chips_data['error']}\n"
+                "The squad optimiser needs an ILP solver (pip install pulp)."
+            )
+            for t in (self.wildcard_table, self.freehit_table, self.tc_table,
+                      self.bgw_dgw_table):
+                self._clear_table(t)
+            return
+
+        used = chips_data.get("used") or []
+        self.chip_status.setText(
+            "Chips already played this season: "
+            + (", ".join(used) if used else "none")
+            + ".  Wildcard is optimised over 5 gameweeks; Free Hit over one."
+        )
+
+        for key, table in (("wildcard", self.wildcard_table),
+                           ("free_hit", self.freehit_table)):
+            res = chips_data.get(key) or {}
+            squad = res.get("squad")
+            if squad is not None and not squad.empty:
+                fill_table(table, squad.sort_values("pred_points_adj", ascending=False),
+                           OPTIMAL_SQUAD_COLS)
+            else:
+                self._clear_table(table)
+
+        tc = chips_data.get("triple_captain")
+        if tc is not None and not tc.empty:
+            fill_table(self.tc_table, tc.head(15), TC_COLS)
+        else:
+            self._clear_table(self.tc_table)
+
+        bb = chips_data.get("bench_boost") or {}
+        risky = bb.get("risky_bench_players") or []
+        msg = f"Bench Boost is worth about {bb.get('bench_boost_value', 0):.1f} predicted points."
+        if risky:
+            msg += ("\n\nRotation risk on the bench: " + ", ".join(risky) +
+                    " — a bench boost is worthless if they don't play.")
+        self.bench_boost_label.setText(msg)
+
+        bd = chips_data.get("blank_double")
+        if bd is not None and not bd.empty:
+            cols = [(c, c.replace("_", " ").title(), None) for c in bd.columns]
+            fill_table(self.bgw_dgw_table, bd, cols)
+        else:
+            self._clear_table(self.bgw_dgw_table)
+
+    def _update_h2h(self):
+        """Recompute the head-to-head whenever either manager selection
+        changes. Shared players cancel out between two squads, so only the
+        differences are shown -- they are the only thing that can move the gap.
+        """
+        data = self._data or {}
+        squads = data.get("league_squads")
+        preds = data.get("predictions")
+        if squads is None or preds is None:
+            return
+        a_id = self.h2h_a.currentData()
+        b_id = self.h2h_b.currentData()
+        if a_id is None or b_id is None or a_id == b_id:
+            self.h2h_summary.setText("Pick two different managers to compare.")
+            self._clear_table(self.h2h_a_table)
+            self._clear_table(self.h2h_b_table)
+            return
+        import league_extras
+        h = league_extras.head_to_head(squads, preds, a_id, b_id)
+        if "error" in h:
+            self.h2h_summary.setText(h["error"])
+            return
+        diff = h["projected_a"] - h["projected_b"]
+        lead = h["name_a"] if diff >= 0 else h["name_b"]
+        self.h2h_summary.setText(
+            f"{h['name_a']} vs {h['name_b']} — {h['shared_n']} of {h['squad_size']} "
+            f"players shared ({h['overlap_pct']:.0f}% overlap). "
+            f"Captains: {h['captain_a'] or '-'} vs {h['captain_b'] or '-'}. "
+            f"Projected this GW: {h['projected_a']:.1f} vs {h['projected_b']:.1f} "
+            f"— {lead} by {abs(diff):.1f}."
+        )
+        self.h2h_a_label.setText(f"Only {h['name_a']} has ({h['unique_pred_a']:.1f} pred pts)")
+        self.h2h_b_label.setText(f"Only {h['name_b']} has ({h['unique_pred_b']:.1f} pred pts)")
+        fill_table(self.h2h_a_table, h["only_a"], H2H_COLS)
+        fill_table(self.h2h_b_table, h["only_b"], H2H_COLS)
+
+    def _update_owners(self):
+        data = self._data or {}
+        squads = data.get("league_squads")
+        if squads is None:
+            return
+        import league_extras
+        text = self.owns_input.text().strip()
+        if len(text) < 2:
+            self._clear_table(self.owners_table)
+            return
+        owners = league_extras.player_owners(squads, text)
+        if owners.empty:
+            self._clear_table(self.owners_table)
+            return
+        fill_table(self.owners_table, owners, OWNERS_COLS)
+
+    def _populate_league_extras(self, data: dict):
+        proj = data.get("projection")
+        if proj is not None and not proj.empty:
+            fill_table(self.projection_table, proj, PROJECTION_COLS)
+        else:
+            self._clear_table(self.projection_table)
+
+        rivals = data.get("rival_transfers")
+        if rivals is not None and not rivals.empty:
+            cols = [c for c in RIVAL_TRANSFER_COLS if c[0] in rivals.columns]
+            fill_table(self.rival_transfers_table, rivals, cols or
+                       [(c, c.replace("_", " ").title(), None) for c in rivals.columns])
+        else:
+            self._clear_table(self.rival_transfers_table)
+
+        eo = data.get("eff_ownership")
+        if eo is not None and not eo.empty:
+            fill_table(self.eo_table, eo.head(40), EO_COLS)
+        else:
+            self._clear_table(self.eo_table)
+
+        form = data.get("league_form")
+        if form is not None and not form.empty:
+            fill_table(self.form_table, form, FORM_COLS)
+        else:
+            self._clear_table(self.form_table)
+
+        # captaincy edge shown above the existing captaincy table
+        ci = data.get("captaincy_impact") or {}
+        if ci and "error" not in ci:
+            edge = ci.get("edge_vs_league", 0.0)
+            verdict = ("ahead of" if edge > 0 else "behind" if edge < 0 else "level with")
+            self.captaincy_note.setText(
+                f"Your captain: {ci.get('my_captain')} ({ci.get('my_captain_pred'):.2f} pred). "
+                f"League average captain: {ci.get('league_avg_captain_pred'):.2f}. "
+                f"That puts you {abs(edge):.2f} pts {verdict} the field once doubled "
+                f"— most popular pick is {ci.get('most_popular')}."
+            )
+        else:
+            self.captaincy_note.setText("")
+
+        # populate the head-to-head selectors once, defaulting to me vs the leader
+        squads = data.get("league_squads")
+        if squads is not None and not squads.empty and self.h2h_a.count() == 0:
+            managers = (squads[["entry", "entry_name"]].drop_duplicates()
+                        .sort_values("entry_name"))
+            for cb in (self.h2h_a, self.h2h_b):
+                cb.blockSignals(True)
+                cb.clear()
+                for _, r in managers.iterrows():
+                    cb.addItem(str(r["entry_name"]), int(r["entry"]))
+                cb.blockSignals(False)
+            # recommend.load_squad's meta carries no entry id, so use the team
+            # ID the user actually typed
+            try:
+                my_id = int(self.team_id_input.text())
+            except (TypeError, ValueError):
+                my_id = None
+            if my_id is not None:
+                idx = self.h2h_a.findData(my_id)
+                if idx >= 0:
+                    self.h2h_a.setCurrentIndex(idx)
+            self.h2h_b.setCurrentIndex(1 if self.h2h_b.currentIndex() == 0 else 0)
+            self._update_h2h()
+
+        fun = data.get("fun_stats") or {}
+        for key, table, cols in (
+            ("bench_points", self.bench_points_table, BENCH_POINTS_COLS),
+            ("value_growth", self.value_growth_table, VALUE_GROWTH_COLS),
+            ("rank_swings", self.rank_swings_table, RANK_SWING_COLS),
+            ("template_adherence", self.template_table, TEMPLATE_COLS),
+        ):
+            df = fun.get(key)
+            if df is not None and not df.empty:
+                fill_table(table, df, cols)
+            else:
+                self._clear_table(table)
 
     # ------------------------------------------------------------ chat ---
 

@@ -161,7 +161,36 @@ class RefreshWorker(QObject):
                 "league_name": None,
                 "fixture_matrix": None,
                 "rank_progression": None,
+                "league_squads": None,
+                "manager_hist": None,
+                "eff_ownership": None,
+                "league_form": None,
+                "captaincy_impact": None,
+                "fun_stats": None,
+                "projection": None,
+                "rival_transfers": None,
+                "chips": None,
             }
+
+            # --- chip strategy (squad-only, doesn't need a league) ---
+            self.progress.emit("Optimising wildcard / free-hit squads...")
+            try:
+                import chips
+                blank_double = chips.detect_blank_double_gameweeks(n=5)
+                result["chips"] = {
+                    "blank_double": blank_double,
+                    "wildcard": chips.wildcard_squad(self.team_id, squad),
+                    "free_hit": chips.free_hit_squad(self.team_id, squad),
+                    "triple_captain": chips.triple_captain_candidates(squad, blank_double),
+                    "bench_boost": chips.bench_boost_value(
+                        squad, bench["element"].tolist() if "element" in bench else []
+                    ),
+                    "used": chips.chips_used(self.team_id),
+                }
+            except Exception as e:
+                # the ILP needs pulp; degrade to a message rather than killing
+                # the whole refresh
+                result["chips"] = {"error": str(e)}
 
             self.progress.emit("Building fixture difficulty matrix...")
             try:
@@ -181,11 +210,51 @@ class RefreshWorker(QObject):
                 result["insights"] = insights
                 result["league_name"] = standings.attrs.get("league_name", "Mini League")
 
+                result["league_squads"] = league_squads
+
                 self.progress.emit(f"Pulling GW-by-GW rank progression for {len(standings)} managers...")
                 try:
                     result["rank_progression"] = mini_league.league_rank_progression(standings)
                 except Exception:
                     result["rank_progression"] = None
+
+                self.progress.emit("Projecting this gameweek's league winner...")
+                try:
+                    import league_projection
+                    result["projection"] = league_projection.project_gw_winner(
+                        league_squads, standings, self.event_id
+                    )
+                    result["rival_transfers"] = league_projection.per_manager_transfer_suggestions(
+                        league_squads
+                    )
+                except Exception:
+                    result["projection"] = None
+                    result["rival_transfers"] = None
+
+                self.progress.emit("Crunching league fun stats...")
+                try:
+                    manager_hist = _manager_gw_history(standings)
+                    result["manager_hist"] = manager_hist
+                    result["fun_stats"] = build_fun_stats(
+                        league_squads, insights, manager_hist, self.team_id
+                    )
+                except Exception:
+                    result["fun_stats"] = None
+
+                self.progress.emit("Computing effective ownership and league form...")
+                try:
+                    import league_extras
+                    result["eff_ownership"] = league_extras.effective_ownership(league_squads)
+                    result["league_form"] = league_extras.league_form(
+                        result.get("manager_hist"), last_n=4
+                    )
+                    result["captaincy_impact"] = league_extras.captaincy_impact(
+                        league_squads, predictions, self.team_id
+                    )
+                except Exception:
+                    result["eff_ownership"] = None
+                    result["league_form"] = None
+                    result["captaincy_impact"] = None
 
             self.progress.emit("Done.")
             self.finished.emit(result)

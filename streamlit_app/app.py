@@ -47,11 +47,25 @@ DEFAULT_TEAM_ID = 8041052
 
 # ---------------------------------------------------------------- caching ---
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_current_event() -> int:
-    bs = fpl_api.bootstrap_static()
-    ev = fpl_api.current_event(bs)
-    return max(ev - 1, 1)  # "last finished" event, same convention as the GUI
+@st.cache_data(ttl=300, show_spinner=False)
+def get_active_picks_event() -> tuple[int, bool]:
+    """Which gameweek's picks are the "current" squad, and whether it's
+    still being played. bootstrap's is_current event is locked in (deadline
+    passed) the moment it starts, so once a gameweek kicks off its picks are
+    immediately the real current squad -- not last week's. Probes with the
+    default team since deadline timing is identical for everyone.
+    Returns (event_id, is_live) where is_live=True means matches are still
+    being played (not yet finished) for that event."""
+    bs = fpl_api.bootstrap_static(max_age_s=120)
+    current_id = fpl_api.current_event(bs)
+    current_meta = next((e for e in bs["events"] if e["id"] == current_id), {})
+    try:
+        fpl_api.entry_picks(DEFAULT_TEAM_ID, current_id)
+        return current_id, not current_meta.get("finished", True)
+    except Exception:
+        prev_id = max(current_id - 1, 1)
+        prev_meta = next((e for e in bs["events"] if e["id"] == prev_id), {})
+        return prev_id, not prev_meta.get("finished", True)
 
 
 @st.cache_data(ttl=1800, show_spinner="Scoring ~650 players (live data pull)...")
@@ -82,6 +96,11 @@ def get_squad(team_id: int, event: int):
     sv = squad_value_mod.squad_value_report(team_id, squad)
     squad = squad.merge(sv[["element", "buy_price_m", "sell_price_m", "profit_m"]], on="element", how="left")
     return squad, meta
+
+
+@st.cache_data(ttl=90, show_spinner=False)  # short TTL: this genuinely changes during live matches
+def get_live_score(squad: pd.DataFrame, event: int) -> dict:
+    return recommend.live_squad_score(squad, event)
 
 
 def money(v) -> str:
@@ -131,7 +150,15 @@ else:
     chosen_label = "Manual entry"
     active_team_id = st.sidebar.number_input("Team ID (manual)", value=DEFAULT_TEAM_ID, step=1)
 
-event = st.sidebar.number_input("Last finished gameweek", value=get_current_event(), min_value=1, max_value=38, step=1)
+_default_event, IS_LIVE_GW = get_active_picks_event()
+event = st.sidebar.number_input(
+    "Gameweek" + (" (live now)" if IS_LIVE_GW else ""),
+    value=_default_event, min_value=1, max_value=38, step=1,
+)
+# only trust the live-in-progress flag when the user hasn't overridden the
+# auto-detected gameweek -- picking an old GW manually should never show a
+# "live" badge for a match week that's long over.
+IS_LIVE_GW = IS_LIVE_GW and int(event) == _default_event
 
 st.sidebar.divider()
 st.sidebar.caption(
@@ -155,17 +182,40 @@ except Exception as e:
     st.stop()
 
 st.title(f"{meta['team_name']}")
-st.caption(f"Viewing as **{chosen_label}** | Squad entering GW{meta['event'] + 1}")
+if IS_LIVE_GW:
+    st.caption(f"Viewing as **{chosen_label}** | 🔴 GW{meta['event']} live now")
+else:
+    st.caption(f"Viewing as **{chosen_label}** | Squad entering GW{meta['event'] + 1}")
 
 xi, bench = recommend.best_starting_xi(squad)
 sellable = squad["sell_price_m"].sum() if "sell_price_m" in squad else meta["value"]
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Bank", money(meta["bank"]))
-c2.metric("Squad Value", money(meta["value"]))
-c3.metric("Sellable Value", money(sellable))
-c4.metric("Predicted XI Pts", f"{xi['pred_points_adj'].sum():.1f}")
-c5.metric("Suggested Captain", xi.iloc[0]["web_name"])
+if IS_LIVE_GW:
+    try:
+        live = get_live_score(squad, int(event))
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Bank", money(meta["bank"]))
+        c2.metric("Squad Value", money(meta["value"]))
+        c3.metric(f"🔴 Live GW{event} Points", live["live_total"])
+        c4.metric("Points on bench (live)", live["bench_points"])
+        cap_row = squad[squad["is_captain"]]
+        cap_name = cap_row.iloc[0]["web_name"] if not cap_row.empty else "-"
+        c5.metric("Captain", cap_name)
+        with st.expander("Live points by player (this gameweek, updates during matches)"):
+            st.dataframe(live["by_player"], use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.warning(f"Couldn't load live points: {e}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Bank", money(meta["bank"]))
+        c2.metric("Squad Value", money(meta["value"]))
+        c3.metric("Sellable Value", money(sellable))
+else:
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Bank", money(meta["bank"]))
+    c2.metric("Squad Value", money(meta["value"]))
+    c3.metric("Sellable Value", money(sellable))
+    c4.metric("Predicted XI Pts", f"{xi['pred_points_adj'].sum():.1f}")
+    c5.metric("Suggested Captain", xi.iloc[0]["web_name"])
 
 AI_AVAILABLE = llm_assist.is_available()
 
@@ -244,6 +294,10 @@ with tabs[tab_idx["Price Watch"]]:
 # ----------------------------------------------------------- Mini League ---
 with tabs[tab_idx["Mini League"]]:
     st.subheader(f"{league_name} standings")
+    if IS_LIVE_GW:
+        st.caption(f"🔴 GW{event} is live — event_total/total below update in "
+                   f"near-real-time as matches are played (FPL computes this "
+                   f"server-side, not this app).")
     st.dataframe(
         standings[["rank", "entry_name", "player_name", "event_total", "total"]],
         use_container_width=True, hide_index=True,

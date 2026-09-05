@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fpl_api import entry, entry_picks
+from fpl_api import entry, entry_picks, live_points_by_element
 from squad_value import squad_value_report
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -42,6 +42,28 @@ def load_squad(team_id: int, event: int) -> tuple[pd.DataFrame, dict]:
         "team_name": e["name"],
     }
     return squad, meta
+
+
+def live_squad_score(squad: pd.DataFrame, event: int) -> dict:
+    """Actual accumulating points for this squad in `event`, using FPL's live
+    endpoint (updates during matches -- goals/bonus tick the total up in
+    near-real-time). NOT a prediction: this is what actually happened/is
+    happening, for a gameweek whose deadline has passed. Captain multiplier
+    from the picks themselves is respected (already reflects any auto-vice
+    substitution FPL itself has applied if the captain didn't play).
+    """
+    live = live_points_by_element(event)
+    s = squad.copy()
+    s["live_points"] = s["element"].map(live).fillna(0).astype(int)
+    starters = s[s["multiplier"] > 0]
+    bench = s[s["multiplier"] == 0]
+    return {
+        "live_total": int((starters["live_points"] * starters["multiplier"]).sum()),
+        "bench_points": int(bench["live_points"].sum()),
+        "by_player": s[["web_name", "position", "multiplier", "live_points"]].sort_values(
+            "live_points", ascending=False
+        ),
+    }
 
 
 def best_starting_xi(squad: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

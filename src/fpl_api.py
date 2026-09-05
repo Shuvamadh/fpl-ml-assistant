@@ -37,6 +37,21 @@ def fixtures(max_age_s: int = 1800) -> list:
     return _cached_get("fixtures/", "fixtures.json", max_age_s)
 
 
+def event_live(event: int, max_age_s: int = 60) -> dict:
+    """Live, in-progress stats for every player in one gameweek -- updates
+    during matches (total_points ticks up as goals/assists/bonus land).
+    Short cache TTL by design: this is the one endpoint that's genuinely
+    live, unlike bootstrap/fixtures which barely change intra-gameweek."""
+    return _cached_get(f"event/{event}/live/", f"event_{event}_live.json", max_age_s)
+
+
+def live_points_by_element(event: int) -> dict[int, int]:
+    """element id -> total_points so far this gameweek (0 if not yet fetched
+    for that event, e.g. the gameweek hasn't started)."""
+    data = event_live(event)
+    return {e["id"]: e["stats"]["total_points"] for e in data.get("elements", [])}
+
+
 def entry(team_id: int) -> dict:
     return _get(f"entry/{team_id}/")
 
