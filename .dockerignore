@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.devcontainer
+__pycache__
+*.pyc
+*.pyo
+gui/__pycache__
+gui/test_run.log
+notebooks
+GUI_PLAN.md
+Khasi Leauge Participants.xlsx
+install_shortcut.ps1
