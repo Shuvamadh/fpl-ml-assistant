@@ -2,10 +2,17 @@
 # environment is rebuilt from latest on every redeploy, so a LightGBM major
 # bump can break models/*.txt loading ("Model format error") on a redeploy
 # that changed nothing in this repo. Bump these on purpose, not by accident.
+#
+# pandas/numpy/matplotlib are pinned to versions with prebuilt wheels for
+# Python 3.14 -- Streamlit Cloud ignores runtime.txt and the dashboard's
+# Python version picker and always provisions 3.14, and the older pins here
+# (pandas 2.2.3, numpy 2.1.3, matplotlib 3.9.2) predate 3.14 entirely, which
+# silently broke `import matplotlib` on every deploy. These exact versions
+# were verified working end-to-end against this app locally on Python 3.14.
 streamlit==1.63.0
-pandas==2.2.3
-numpy==2.1.3
+pandas==3.0.5
+numpy==2.5.1
 requests==2.32.3
 lightgbm==4.7.0
 pulp==2.9.0
-matplotlib==3.9.2
+matplotlib==3.11.1
