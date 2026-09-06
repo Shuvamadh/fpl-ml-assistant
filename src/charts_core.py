@@ -52,6 +52,35 @@ POSITION_COLORS = {"GKP": "#00c853", "DEF": "#ff4b4b", "MID": "#38bdf8", "FWD": 
 SERIES = ["#38bdf8", "#facc15", "#00c853", "#ff4b4b", "#a78bfa", "#fb923c"]
 
 
+MEDAL_COLORS = ["#CD7F32", "#C0C0C0", "#FFD700"]  # bronze, silver, gold
+
+
+def _medal_colors(n: int, base_color: str, highlight_idx=None, highlight_color=None):
+    """Color list for a barh sorted ascending, so the last row is 1st place.
+    The top 3 bars get bronze/silver/gold; everything else is base_color,
+    except highlight_idx (e.g. "this is you") which wins over the base color
+    but never overrides a medal -- being 2nd in the league is more
+    interesting than being highlighted as yourself.
+    """
+    colors = [base_color] * n
+    if highlight_idx is not None and highlight_color is not None:
+        for i in highlight_idx:
+            if 0 <= i < n:
+                colors[i] = highlight_color
+    for i, c in enumerate(MEDAL_COLORS):
+        idx = n - 3 + i
+        if 0 <= idx < n:
+            colors[idx] = c
+    return colors
+
+
+def _label_bars(ax, bars, color, fontsize=8):
+    """Value labels at the end of each bar -- reading exact numbers off an
+    unlabeled bar chart means hovering, which a static/shared chart doesn't
+    support, so the number belongs right on the bar."""
+    ax.bar_label(bars, padding=3, color=color, fontsize=fontsize, fmt="%.0f")
+
+
 def _p(palette):
     """Merge a caller palette over the defaults so a partial theme dict (or
     None) never raises KeyError mid-draw."""
@@ -372,14 +401,17 @@ def league_standings_bar(ax, standings: pd.DataFrame, my_entry_name: str,
     t = _p(palette)
     if standings is None or standings.empty:
         return _empty(ax, "No standings", t)
-    df = standings.sort_values("total")
-    colors = [t["accent2"] if n == my_entry_name else t["series_1"] for n in df["entry_name"]]
-    ax.barh(df["entry_name"], df["total"], color=colors)
+    df = standings.sort_values("total").reset_index(drop=True)
+    mine = [i for i, n in enumerate(df["entry_name"]) if n == my_entry_name]
+    colors = _medal_colors(len(df), t["series_1"], mine, t["accent2"])
+    bars = ax.barh(df["entry_name"], df["total"], color=colors)
+    _label_bars(ax, bars, t["text_dim"])
     ax.set_xlabel("Total points")
     ax.set_title("League standings")
     style_axes(ax, t, transparent=transparent)
     ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
     ax.grid(axis="y", visible=False)
+    ax.margins(x=0.08)
     return ax
 
 
@@ -461,11 +493,55 @@ def league_form_bar(ax, form: pd.DataFrame, last_n: int, palette=None, transpare
     t = _p(palette)
     if form is None or form.empty:
         return _empty(ax, "No form data", t)
-    df = form.sort_values("recent_points")
-    ax.barh(df["entry_name"], df["recent_points"], color=SERIES[2])
+    df = form.sort_values("recent_points").reset_index(drop=True)
+    colors = _medal_colors(len(df), SERIES[2])
+    bars = ax.barh(df["entry_name"], df["recent_points"], color=colors)
+    _label_bars(ax, bars, t["text_dim"])
     ax.set_xlabel(f"Points, last {last_n} GWs")
     ax.set_title(f"League form (last {last_n} gameweeks)")
     style_axes(ax, t, transparent=transparent)
+    ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
+    ax.grid(axis="y", visible=False)
+    ax.margins(x=0.08)
+    return ax
+
+
+def gw_points_bar(ax, standings: pd.DataFrame, event, my_entry_name: str,
+                   palette=None, transparent=False):
+    """This gameweek's scores, ranked -- the standings table sorts by season
+    total, which buries who's actually winning THIS week's prize."""
+    t = _p(palette)
+    if standings is None or standings.empty or "event_total" not in standings:
+        return _empty(ax, "No standings", t)
+    df = standings.sort_values("event_total").reset_index(drop=True)
+    mine = [i for i, n in enumerate(df["entry_name"]) if n == my_entry_name]
+    colors = _medal_colors(len(df), SERIES[0], mine, t["accent2"])
+    bars = ax.barh(df["entry_name"], df["event_total"], color=colors)
+    _label_bars(ax, bars, t["text_dim"])
+    ax.set_xlabel("Points")
+    ax.set_title(f"GW{event} leaderboard")
+    style_axes(ax, t, transparent=transparent)
+    ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
+    ax.grid(axis="y", visible=False)
+    ax.margins(x=0.08)
+    return ax
+
+
+def season_best_gw_bar(ax, best: pd.DataFrame, palette=None, transparent=False):
+    """Each manager's single highest-scoring gameweek this season -- a
+    different question than cumulative total or recent form: who's actually
+    capable of a big week when it clicks."""
+    t = _p(palette)
+    if best is None or best.empty:
+        return _empty(ax, "No history yet", t)
+    df = best.sort_values("best_points").reset_index(drop=True)
+    colors = _medal_colors(len(df), SERIES[4])
+    bars = ax.barh(df["entry_name"], df["best_points"], color=colors)
+    _label_bars(ax, bars, t["text_dim"])
+    ax.set_xlabel("Points")
+    ax.set_title("Best single gameweek this season")
+    style_axes(ax, t, transparent=transparent)
+    ax.margins(x=0.08)
     ax.grid(axis="x", color=t["border"], linewidth=0.5, alpha=0.35)
     ax.grid(axis="y", visible=False)
     return ax

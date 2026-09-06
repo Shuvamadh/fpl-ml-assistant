@@ -176,6 +176,27 @@ def get_manager_hist(league_id: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@st.cache_data(ttl=1800, max_entries=50, show_spinner=False)
+def get_manager_chips(league_id: int) -> pd.DataFrame:
+    """One row per chip a manager has played, across the whole season."""
+    import concurrent.futures as cf
+
+    standings = get_standings(league_id)
+    rows = []
+
+    def _fetch(row):
+        try:
+            return row["entry_name"], fpl_api.entry_history(row["entry"])["chips"]
+        except Exception:
+            return row["entry_name"], []
+
+    with cf.ThreadPoolExecutor(max_workers=12) as ex:
+        for name, chips in ex.map(_fetch, [r for _, r in standings.iterrows()]):
+            for c in chips:
+                rows.append({"entry_name": name, "chip": c.get("name"), "event": c.get("event")})
+    return pd.DataFrame(rows)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fixture_matrix(n: int = 5) -> pd.DataFrame:
     try:
@@ -673,13 +694,14 @@ with tabs[T["Mini League"]]:
         my_row = standings[standings["entry"] == int(active_team_id)]
         my_entry_name = my_row.iloc[0]["entry_name"] if not my_row.empty else ""
 
-        ml = st.tabs(["Table", "Ownership", "Projections", "Form", "Head-to-head", "Banter"])
+        ml = st.tabs(["Table", "Ownership", "Projections", "Form", "Head-to-head",
+                      "Winners", "Banter"])
 
         with ml[0]:
-            st.dataframe(
-                standings[["rank", "entry_name", "player_name", "event_total", "total"]],
-                width="stretch", hide_index=True,
-            )
+            medals = {1: "🥇 ", 2: "🥈 ", 3: "🥉 "}
+            table = standings[["rank", "entry_name", "player_name", "event_total", "total"]].copy()
+            table["rank"] = table["rank"].apply(lambda r: f"{medals.get(r, '')}{r}")
+            st.dataframe(table, width="stretch", hide_index=True)
             fig1(chart(charts_core.league_standings_bar, standings, my_entry_name), height=4.4)
 
         with ml[1]:
@@ -763,6 +785,73 @@ with tabs[T["Mini League"]]:
                                  width="stretch", hide_index=True)
 
         with ml[5]:
+            medals = {1: "🥇 ", 2: "🥈 ", 3: "🥉 "}
+            st.markdown(ui.rule(f"GW{event} leaderboard (live)"), unsafe_allow_html=True)
+            live_board = standings.sort_values("event_total", ascending=False).reset_index(drop=True)
+            live_board.insert(0, "pos", range(1, len(live_board) + 1))
+            live_board["pos"] = live_board["pos"].apply(lambda r: f"{medals.get(r, '')}{r}")
+            st.dataframe(
+                live_board[["pos", "entry_name", "player_name", "event_total"]]
+                .rename(columns={"entry_name": "Manager", "player_name": "Player",
+                                 "event_total": "GW points"}),
+                width="stretch", hide_index=True,
+            )
+            fig1(chart(charts_core.gw_points_bar, standings, event, my_entry_name), height=4.0)
+
+            hist = get_manager_hist(int(league_id))
+            winners = league_extras.gameweek_winners(hist)
+            if winners.empty:
+                st.caption("No completed gameweeks yet.")
+            else:
+                st.markdown(ui.rule("Gameweek winners"), unsafe_allow_html=True)
+                display = winners.rename(columns={
+                    "event": "GW", "entry_name": "Winner",
+                    "points": "Points", "margin": "Margin",
+                })
+                st.dataframe(display, width="stretch", hide_index=True)
+
+                tally = league_extras.gw_win_tally(winners)
+                st.markdown(ui.rule("Most weekly prizes won"), unsafe_allow_html=True)
+                st.dataframe(
+                    tally.rename(columns={"entry_name": "Manager", "gws_won": "GWs won"}),
+                    width="stretch", hide_index=True,
+                )
+
+                st.markdown(ui.rule("Your gameweek-by-gameweek record"), unsafe_allow_html=True)
+                names = sorted(hist["entry_name"].unique()) if not hist.empty else []
+                pick_idx = names.index(my_entry_name) if my_entry_name in names else 0
+                who = st.selectbox("Manager", names, index=pick_idx, key="gw_hist_who")
+                personal = league_extras.manager_gw_table(hist, who)
+                st.dataframe(
+                    personal.rename(columns={
+                        "event": "GW", "points": "Points", "total_points": "Total",
+                        "rank": "Overall rank", "points_on_bench": "Bench pts",
+                        "event_transfers_cost": "Transfer cost", "value": "Value (£m)",
+                    }),
+                    width="stretch", hide_index=True,
+                )
+
+                st.markdown(ui.rule("Best single gameweek this season"), unsafe_allow_html=True)
+                best = league_extras.season_best_gw(hist)
+                fig1(chart(charts_core.season_best_gw_bar, best), height=4.0)
+                st.dataframe(
+                    best.rename(columns={"entry_name": "Manager", "best_points": "Points",
+                                         "event": "GW"}),
+                    width="stretch", hide_index=True,
+                )
+
+            chips_played = get_manager_chips(int(league_id))
+            chip_table = league_extras.chip_usage_table(chips_played)
+            st.markdown(ui.rule("Chips played"), unsafe_allow_html=True)
+            if chip_table.empty:
+                st.caption("No chips played yet.")
+            else:
+                st.dataframe(
+                    chip_table.rename(columns={"entry_name": "Manager", "chip": "Chip", "event": "GW"}),
+                    width="stretch", hide_index=True,
+                )
+
+        with ml[6]:
             if league_squads.empty:
                 st.caption("No squad data for this gameweek.")
             else:

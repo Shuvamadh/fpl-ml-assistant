@@ -155,6 +155,84 @@ def league_form(manager_hist: pd.DataFrame, last_n: int = 4) -> pd.DataFrame:
     return out.sort_values("recent_points", ascending=False).reset_index(drop=True)
 
 
+def gameweek_winners(manager_hist: pd.DataFrame) -> pd.DataFrame:
+    """The actual weekly prize winner for every completed gameweek.
+
+    The standings table only shows cumulative totals, which is useless for a
+    league that pays out per-gameweek prizes -- nobody can tell from it who
+    won GW3 without doing the subtraction themselves.
+
+    Returns: event, entry_name, points, margin (gap to the runner-up).
+    """
+    cols = ["event", "entry_name", "points", "margin"]
+    if manager_hist is None or manager_hist.empty or "points" not in manager_hist:
+        return pd.DataFrame(columns=cols)
+
+    def _winner(g: pd.DataFrame) -> pd.Series:
+        top2 = g.nlargest(2, "points")
+        margin = (top2["points"].iloc[0] - top2["points"].iloc[1]) if len(top2) > 1 else 0
+        return pd.Series({
+            "entry_name": top2["entry_name"].iloc[0],
+            "points": int(top2["points"].iloc[0]),
+            "margin": int(margin),
+        })
+
+    out = (manager_hist.groupby("event").apply(_winner, include_groups=False)
+           .reset_index())
+    return out.sort_values("event", ascending=False).reset_index(drop=True)[cols]
+
+
+def gw_win_tally(winners: pd.DataFrame) -> pd.DataFrame:
+    """How many weekly prizes each manager has actually banked so far."""
+    if winners is None or winners.empty:
+        return pd.DataFrame(columns=["entry_name", "gws_won"])
+    return (winners.groupby("entry_name", as_index=False)
+            .size().rename(columns={"size": "gws_won"})
+            .sort_values("gws_won", ascending=False).reset_index(drop=True))
+
+
+def manager_gw_table(manager_hist: pd.DataFrame, entry_name: str) -> pd.DataFrame:
+    """One manager's full gameweek-by-gameweek record, newest first.
+
+    Answers "how did I actually do each week" -- the kind of question the
+    cumulative standings and the league-wide form chart both bury.
+    """
+    cols = ["event", "points", "total_points", "rank", "points_on_bench",
+            "event_transfers_cost", "value"]
+    if manager_hist is None or manager_hist.empty:
+        return pd.DataFrame(columns=cols)
+    mh = manager_hist[manager_hist["entry_name"] == entry_name].sort_values(
+        "event", ascending=False).copy()
+    if "value" in mh.columns:
+        mh["value"] = mh["value"] / 10.0
+    return mh[[c for c in cols if c in mh.columns]].reset_index(drop=True)
+
+
+def season_best_gw(manager_hist: pd.DataFrame) -> pd.DataFrame:
+    """Each manager's single highest-scoring gameweek this season, and which
+    week it was -- separate from cumulative total or recent form, this is
+    "who's shown they can actually go off when it clicks".
+    """
+    cols = ["entry_name", "best_points", "event"]
+    if manager_hist is None or manager_hist.empty or "points" not in manager_hist:
+        return pd.DataFrame(columns=cols)
+    idx = manager_hist.groupby("entry_name")["points"].idxmax()
+    best = manager_hist.loc[idx, ["entry_name", "points", "event"]]
+    return (best.rename(columns={"points": "best_points"})
+            .sort_values("best_points", ascending=False).reset_index(drop=True)[cols])
+
+
+def chip_usage_table(manager_chips: pd.DataFrame) -> pd.DataFrame:
+    """Which manager played which chip in which gameweek -- chips are the
+    biggest single swing available and everyone wants to know who's still
+    holding theirs versus who's already spent it.
+    """
+    cols = ["entry_name", "chip", "event"]
+    if manager_chips is None or manager_chips.empty:
+        return pd.DataFrame(columns=cols)
+    return manager_chips[cols].sort_values(["event", "entry_name"]).reset_index(drop=True)
+
+
 def captaincy_impact(league_squads: pd.DataFrame, predictions: pd.DataFrame,
                      my_entry: int) -> dict:
     """How your captain choice compares with the league's.
