@@ -1,4 +1,4 @@
-# Hugging Face Spaces (Docker SDK) deployment for the Streamlit app.
+# Docker deployment for the Streamlit app (Render.com, or any Docker host).
 # Pinning everything here means the Python version and dependency set can
 # never silently drift on a redeploy the way it did on Streamlit Community
 # Cloud, where the Python version was only ever a dashboard setting.
@@ -20,11 +20,13 @@ COPY assets/ assets/
 COPY models/ models/
 COPY data/ data/
 
-# Spaces' Docker SDK expects the app to listen on 7860.
-EXPOSE 7860
-ENV STREAMLIT_SERVER_PORT=7860 \
-    STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
+ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_HEADLESS=true \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    PORT=8501
 
-CMD ["streamlit", "run", "streamlit_app/app.py"]
+EXPOSE 8501
+
+# Render (and most Docker hosts) assign the port via $PORT at runtime rather
+# than a fixed value, so this needs shell form to expand the env var.
+CMD streamlit run streamlit_app/app.py --server.port=$PORT
