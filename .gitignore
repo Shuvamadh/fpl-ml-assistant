@@ -14,3 +14,6 @@ data/raw.zip
 # modes and between machines.
 data/player_predictions.csv
 data/raw/gws_current_live.csv
+# raw per-season intermediates -- consolidated into data/team_strength.csv and
+# data/player_codes.csv, which ARE committed
+data/raw/teams_*.csv

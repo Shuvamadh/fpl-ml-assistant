@@ -19,6 +19,16 @@ from fpl_api import bootstrap_static, player_summary
 # this just nudges for anything the rolling-goals proxy misses.
 FDR_ADJUSTMENT = {1: 1.08, 2: 1.04, 3: 1.00, 4: 0.96, 5: 0.92}
 
+# weight on the component (events -> scoring matrix) model when blending it
+# with the single-stage regressor. The two make different errors -- the
+# component model is stronger on started-player accuracy, ranking (holdout
+# Spearman 0.72 -> 0.75), double gameweeks and the 2025-26 defensive-
+# contribution rule; the single-stage model is a touch steadier on captaincy
+# ceiling and cameo (1-59 min) returns. A holdout sweep put pure MAE lowest
+# near 0.7 and the captain metrics best in the 0.6-0.7 band (see
+# src/eval_models.py). 0 = ignore component, 1 = component only.
+COMPONENT_BLEND_WEIGHT = 0.7
+
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -171,6 +181,47 @@ def load_started_regressor() -> lgb.Booster | None:
     return lgb.Booster(model_file=str(path)) if path.exists() else None
 
 
+def _component_scores(gws: pd.DataFrame, players: pd.DataFrame,
+                      predicts_gw: int, cutoff: int | None) -> pd.DataFrame | None:
+    """Run the component (events -> scoring matrix) model for the target
+    gameweek and return per-player expected points, or None if its models
+    aren't trained yet / anything goes wrong (the caller then falls back to
+    the single-stage model alone)."""
+    try:
+        import components
+    except Exception:
+        return None
+    try:
+        if components.load_models().get("minutes") is None:
+            return None
+        uf = upcoming_fixtures_by_team(n=3, from_event=cutoff)
+        uf = uf[uf["event"] == predicts_gw][["team", "opponent", "is_home", "event"]].rename(
+            columns={"team": "team_id", "opponent": "opponent_id"})
+        if uf.empty:
+            return None
+        cop = pd.to_numeric(players["chance_of_playing_next_round"], errors="coerce")
+        chance_map = {int(i): (float(v) / 100 if pd.notna(v) else np.nan)
+                      for i, v in zip(players["id"], cop)}
+        # element-summary history carries no position column; bring it in
+        g = gws.drop(columns=["position"], errors="ignore").merge(
+            players[["id", "position"]].rename(columns={"id": "element"}),
+            on="element", how="left")
+        code_map = ({int(i): int(c) for i, c in zip(players["id"], players["code"])}
+                    if "code" in players.columns else None)
+        out = components.score_live(g, uf, chance_map=chance_map, code_map=code_map)
+        if out is None or out.empty:
+            return None
+        return out.rename(columns={
+            "pred_points": "pred_points_comp",
+            "pred_points_if_starts": "pred_if_starts_comp",
+            "start_probability": "start_probability_comp",
+        })[["element", "pred_points_comp", "pred_if_starts_comp",
+            "start_probability_comp", "n_fixtures"]]
+    except Exception as e:  # pragma: no cover - defensive, keeps live scoring alive
+        print(f"[predict] component model skipped: {type(e).__name__}: {e}")
+        return None
+
+
 def score_players(as_of: str = "frozen") -> pd.DataFrame:
     """Score every player for one upcoming gameweek.
 
@@ -231,17 +282,42 @@ def score_players(as_of: str = "frozen") -> pd.DataFrame:
     clf = load_minutes_classifier()
     started_reg = load_started_regressor()
     if not feat.empty:
-        feat["pred_points"] = model.predict(feat[FEATURE_COLS])
+        feat["pred_single"] = model.predict(feat[FEATURE_COLS])
         feat["start_probability"] = clf.predict(feat[FEATURE_COLS]) if clf is not None else np.nan
-        feat["pred_points_if_starts"] = (
+        feat["pred_if_starts_single"] = (
             started_reg.predict(feat[FEATURE_COLS]) if started_reg is not None else np.nan
         )
+
+        # component model, blended in where it produced a number
+        comp = _component_scores(gws, players, predicts_gw, cutoff)
+        w = COMPONENT_BLEND_WEIGHT
+        if comp is not None and not comp.empty:
+            feat = feat.merge(comp, on="element", how="left")
+            has_c = feat["pred_points_comp"].notna()
+            feat["pred_points"] = np.where(
+                has_c, w * feat["pred_points_comp"] + (1 - w) * feat["pred_single"],
+                feat["pred_single"])
+            has_cs = has_c & feat["pred_if_starts_comp"].notna()
+            feat["pred_points_if_starts"] = np.where(
+                has_cs, w * feat["pred_if_starts_comp"] + (1 - w) * feat["pred_if_starts_single"],
+                feat["pred_if_starts_single"])
+            # the component minutes model is a proper 3-way classifier; prefer
+            # its P(start) over the old binary clf where available
+            feat["start_probability"] = feat["start_probability_comp"].where(
+                feat["start_probability_comp"].notna(), feat["start_probability"])
+            feat["n_fixtures"] = feat["n_fixtures"].fillna(1).astype(int)
+        else:
+            feat["pred_points"] = feat["pred_single"]
+            feat["pred_points_if_starts"] = feat["pred_if_starts_single"]
+            feat["n_fixtures"] = 1
     else:
         feat["pred_points"] = np.nan
         feat["start_probability"] = np.nan
         feat["pred_points_if_starts"] = np.nan
+        feat["n_fixtures"] = 1
 
-    merge_cols = ["element", "pred_points", "start_probability", "pred_points_if_starts", "season_gp_prior"]
+    merge_cols = ["element", "pred_points", "start_probability", "pred_points_if_starts",
+                  "n_fixtures", "season_gp_prior"]
     scored = players.merge(
         feat[merge_cols] if not feat.empty else pd.DataFrame(columns=merge_cols),
         left_on="id",
@@ -258,6 +334,7 @@ def score_players(as_of: str = "frozen") -> pd.DataFrame:
     scored.loc[fallback, "start_probability"] = scored.loc[fallback, "position"].map(median_start_prob_by_pos)
     median_if_starts_by_pos = scored.loc[~fallback].groupby("position")["pred_points_if_starts"].median()
     scored.loc[fallback, "pred_points_if_starts"] = scored.loc[fallback, "position"].map(median_if_starts_by_pos)
+    scored["n_fixtures"] = scored["n_fixtures"].fillna(1).astype(int)
 
     scored["now_cost_m"] = scored["now_cost"] / 10.0
     scored["status_ok"] = scored["status"] == "a"
@@ -296,7 +373,7 @@ def score_players(as_of: str = "frozen") -> pd.DataFrame:
         "next_fixture", "next_fdr", "fdr_next_n_mean",
         "pred_points_adj", "value_ratio", "selected_by_percent", "status",
         "status_ok", "chance_of_playing_next_round", "form", "total_points",
-        "minutes", "season_gp_prior", "ep_next", "defensive_contribution",
+        "minutes", "season_gp_prior", "n_fixtures", "ep_next", "defensive_contribution",
         "tackles", "recoveries", "clearances_blocks_interceptions",
         "expected_goals", "expected_assists", "expected_goal_involvements",
         "news", "price_change_percent", "price_signal", "price_flag",

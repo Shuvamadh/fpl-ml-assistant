@@ -41,15 +41,23 @@ jobs:
       - name: Retrain model (single-stage + two-stage classifier)
         run: python src/train_model.py
 
+      - name: Retrain component model (events -> scoring matrix)
+        run: python src/components.py
+
       - name: Refresh validation reports
-        run: python src/backtest.py
+        run: |
+          python src/backtest.py
+          python src/components.py backtest
         continue-on-error: true  # nice-to-have charts, not worth failing the whole run over
 
       - name: Commit updated model/data if anything changed
         run: |
           git config user.name "fpl-ml-assistant-bot"
           git config user.email "actions@github.com"
-          git add data/history_gws.csv data/features.parquet models/ data/backtest_results.csv data/rolling_origin_results.csv
+          git add data/history_gws.csv data/features.parquet models/ \
+            data/backtest_results.csv data/rolling_origin_results.csv \
+            data/team_strength.csv data/player_codes.csv data/career_priors.csv \
+            data/backtest_component_results.csv
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Automated weekly retrain ($(date -u +%Y-%m-%d))"
           git push

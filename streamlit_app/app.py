@@ -207,12 +207,15 @@ def get_fixture_matrix(n: int = 5) -> pd.DataFrame:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_model_mae() -> float:
-    """Measured backtest MAE, for honest uncertainty bands. Falls back to the
-    documented figure when backtest_results.csv is not present."""
-    try:
-        return float(pd.read_csv(DATA_DIR / "backtest_results.csv")["mae_model"].mean())
-    except Exception:
-        return 0.96
+    """Measured walk-forward backtest MAE, for honest uncertainty bands.
+    Prefers the component model's backtest, falls back to the single-stage
+    one, then to the documented figure."""
+    for name in ("backtest_component_results.csv", "backtest_results.csv"):
+        try:
+            return float(pd.read_csv(DATA_DIR / name)["mae_model"].mean())
+        except Exception:
+            continue
+    return 0.95
 
 
 @st.cache_resource(show_spinner=False)
@@ -969,16 +972,26 @@ if AI_AVAILABLE:
 with tabs[T["Model"]]:
     st.markdown(ui.rule("How predictions are made"), unsafe_allow_html=True)
     st.markdown(
-        "LightGBM regression, one upcoming gameweek. All rolling windows are "
-        "leak-free (shifted before that gameweek).\n\n"
-        "- **Form:** rolling 3 and 5 GW means of points, minutes, BPS, ICT, xGI, xGC, "
-        "goals, assists, clean sheets\n"
-        "- **Season-to-date:** expanding mean points, games played\n"
-        "- **Last game:** points, minutes\n"
-        "- **Fixture:** real venue, both teams' recent scoring/conceding rate\n"
-        "- **Player:** cost, position"
+        "The number shown is a **blend of two models** (0.7 weight on the "
+        "component model). All rolling windows are leak-free.\n\n"
+        "**Component model** -- predict each event, then apply the FPL scoring "
+        "rules:\n"
+        "- minutes (unused / 1-59 / 60+), goals & assists (Poisson), bonus "
+        "(Tweedie), saves, team clean sheet & goals conceded, and the 2025-26 "
+        "defensive-contribution +2\n"
+        "- composed with the position scoring matrix, then calibrated per "
+        "position\n"
+        "- handles double gameweeks (sums a team's fixtures) and the new "
+        "defensive-contribution points explicitly\n\n"
+        "**Single-stage model** -- one LightGBM regression straight onto points, "
+        "kept in the blend because it is steadier on cameo returns and the top "
+        "captain pick.\n\n"
+        "Extra signal in the component model: separate xG / xA and per-90 "
+        "rates, ICT split, rolling BPS / bonus / saves, points consistency, FPL "
+        "team strength ratings for both sides, cross-season career priors keyed "
+        "on the stable player code."
     )
-    with st.expander("Full feature list"):
+    with st.expander("Single-stage feature list"):
         st.code("\n".join(FEATURE_COLS))
 
     st.markdown(ui.rule("Feature importance"), unsafe_allow_html=True)
@@ -994,17 +1007,25 @@ with tabs[T["Model"]]:
 
     st.markdown(ui.rule("Validation"), unsafe_allow_html=True)
     st.markdown(
-        "1. **Season holdout:** MAE 0.964 vs 1.059 for a naive career-average baseline.\n"
-        "2. **Walk-forward:** expanding retrain through a season, 5 GWs ahead each time. "
-        "Overall MAE 0.954.\n"
-        "3. **Rolling-origin CV:** trained on strictly earlier seasons, validated on each of "
-        "the last 4. Mean MAE 0.997, std 0.047. Beats naive every season."
+        "On the held-out 2025-26 season, component vs single-stage:\n\n"
+        "| metric | single | component |\n"
+        "|---|---|---|\n"
+        "| walk-forward MAE | 0.955 | **0.944** |\n"
+        "| season-holdout MAE | 0.967 | **0.949** |\n"
+        "| started-player (60+ min) MAE | 2.374 | **2.350** |\n"
+        "| within-gameweek rank correlation | 0.721 | **0.747** |\n\n"
+        "Walk-forward = expanding retrain through the season, 5 GWs ahead each "
+        "time, never looking forward. The component model wins on accuracy and "
+        "ranking; the single-stage model is kept in the blend for cameo and "
+        "captain-pick stability."
     )
-    bp = DATA_DIR / "backtest_results.csv"
+    bp = DATA_DIR / "backtest_component_results.csv"
+    if not bp.exists():
+        bp = DATA_DIR / "backtest_results.csv"
     if bp.exists():
         fig1(chart(charts_core.backtest_mae, pd.read_csv(bp)), height=4.0)
     else:
-        st.info("data/backtest_results.csv not found.")
+        st.info("no backtest results file found.")
 
     st.markdown(ui.rule("Honest metrics"), unsafe_allow_html=True)
     st.markdown(

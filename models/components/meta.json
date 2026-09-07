@@ -1,0 +1,210 @@
+{
+  "val_season": "2025-26",
+  "min_season": "2022-23",
+  "report": {
+    "minutes_logloss": 0.4532695804665094,
+    "minutes_start_auc": 0.9472962920391589,
+    "goals_mae_started": 0.18305822836605323,
+    "goals_pred_vs_actual_mean": [
+      0.12100919175900961,
+      0.109021113243762
+    ],
+    "assists_mae_started": 0.18311862584496272,
+    "assists_pred_vs_actual_mean": [
+      0.11083126567194597,
+      0.1018554062699936
+    ],
+    "bonus_mae_started": 0.4005663823629269,
+    "saves_mae_started_gkp": 1.4012201775774376,
+    "team_rows": [
+      3700,
+      740
+    ],
+    "team_cs_auc": 0.6553299245191138,
+    "team_cs_pred_vs_actual_mean": [
+      0.22521825288941563,
+      0.25
+    ],
+    "team_gc_mae": 0.8982555283680144,
+    "team_gc_pred_vs_actual_mean": [
+      1.5367833688239487,
+      1.3797297297297297
+    ],
+    "dc_base_rate": 0.19977330688580333,
+    "dc_auc": 0.7686473355156449,
+    "calibration": {
+      "DEF": [
+        -0.23947952014057017,
+        1.1468579475771647
+      ],
+      "FWD": [
+        -0.2658000697664489,
+        1.2038256038675157
+      ],
+      "GKP": [
+        -0.0847135071577817,
+        1.131541886896379
+      ],
+      "MID": [
+        -0.10825113723032698,
+        1.1000898976444546
+      ]
+    }
+  },
+  "calibration": {
+    "DEF": [
+      -0.23947952014057017,
+      1.1468579475771647
+    ],
+    "FWD": [
+      -0.2658000697664489,
+      1.2038256038675157
+    ],
+    "GKP": [
+      -0.0847135071577817,
+      1.131541886896379
+    ],
+    "MID": [
+      -0.10825113723032698,
+      1.1000898976444546
+    ]
+  },
+  "feature_sets": {
+    "minutes": [
+      "minutes_r3",
+      "minutes_r5",
+      "starts_r3",
+      "starts_r5",
+      "played60_r3",
+      "played60_r5",
+      "prev_gw_minutes",
+      "prev_gw_starts",
+      "prev_gw_points",
+      "season_gp_prior",
+      "career_min_pg",
+      "career_start_rate",
+      "career_ppg",
+      "cost",
+      "position",
+      "chance_of_playing"
+    ],
+    "goals": [
+      "expected_goals_r3",
+      "expected_goals_r5",
+      "xg90_r3",
+      "xg90_r5",
+      "goals_scored_r3",
+      "goals_scored_r5",
+      "threat_r3",
+      "threat_r5",
+      "ict_index_r5",
+      "expected_goal_involvements_r5",
+      "season_pts_mean_prior",
+      "career_xgi90",
+      "career_ppg",
+      "is_home",
+      "cost",
+      "position",
+      "t_xg_r5",
+      "o_xgc_r5",
+      "o_ga_r5",
+      "str_att",
+      "o_str_def"
+    ],
+    "assists": [
+      "expected_assists_r3",
+      "expected_assists_r5",
+      "xa90_r3",
+      "xa90_r5",
+      "assists_r3",
+      "assists_r5",
+      "creativity_r3",
+      "creativity_r5",
+      "influence_r5",
+      "ict_index_r5",
+      "career_xgi90",
+      "career_ppg",
+      "is_home",
+      "cost",
+      "position",
+      "t_xg_r5",
+      "o_xgc_r5",
+      "str_att",
+      "o_str_def"
+    ],
+    "bonus": [
+      "bps_r3",
+      "bps_r5",
+      "ict_index_r5",
+      "expected_goal_involvements_r5",
+      "threat_r5",
+      "creativity_r5",
+      "influence_r5",
+      "bonus_r5",
+      "position",
+      "cost"
+    ],
+    "saves": [
+      "saves_r3",
+      "saves_r5",
+      "o_xg_r5",
+      "o_gf_r5",
+      "t_xgc_r5",
+      "cost",
+      "o_str_att",
+      "str_def"
+    ],
+    "team_cs": [
+      "t_xgc_r3",
+      "t_xgc_r5",
+      "t_ga_r3",
+      "t_ga_r5",
+      "t_cs_r3",
+      "t_cs_r5",
+      "t_gf_r3",
+      "t_gf_r5",
+      "o_xg_r3",
+      "o_xg_r5",
+      "o_gf_r3",
+      "o_gf_r5",
+      "o_ga_r3",
+      "o_ga_r5",
+      "str_def",
+      "str_att",
+      "o_str_att",
+      "o_str_def",
+      "is_home_team"
+    ],
+    "team_gc": [
+      "t_xgc_r3",
+      "t_xgc_r5",
+      "t_ga_r3",
+      "t_ga_r5",
+      "t_cs_r3",
+      "t_cs_r5",
+      "t_gf_r3",
+      "t_gf_r5",
+      "o_xg_r3",
+      "o_xg_r5",
+      "o_gf_r3",
+      "o_gf_r5",
+      "o_ga_r3",
+      "o_ga_r5",
+      "str_def",
+      "str_att",
+      "o_str_att",
+      "o_str_def",
+      "is_home_team"
+    ],
+    "dc": [
+      "defensive_contribution_r3",
+      "defensive_contribution_r5",
+      "minutes_r5",
+      "played60_r5",
+      "bps_r5",
+      "position",
+      "cost",
+      "career_start_rate"
+    ]
+  }
+}

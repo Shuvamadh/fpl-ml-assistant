@@ -36,13 +36,20 @@ thread so the UI doesn't freeze during the ~1min live data pull.
 ```
 fpl_api.py        official FPL API wrapper (bootstrap, fixtures, entry/picks, transfers, per-player history), file-cached
 collect_history.py  pulls 10 seasons (2016-17..2025-26) of gameweek data -> data/history_gws.csv
+                    + per-season team strength (data/team_strength.csv) and stable player codes (data/player_codes.csv)
 features.py        leak-free rolling/lag feature engineering incl. opponent-strength -> data/features.parquet
 train_model.py     trains LightGBM regressor + reports honest decision-quality metrics -> models/points_model.txt
                     also trains a P(minutes>=60) classifier (train_two_stage()) -> models/minutes_classifier.txt
+scoring.py         FPL scoring matrix (2025-26) + the compose step of the component model
+components.py      component "events -> scoring matrix" model: 8 sub-models (minutes/goals/assists/bonus/
+                    saves/team-CS/team-GC/defensive-contribution) -> models/components/, data/career_priors.csv
+                    `python src/components.py` trains; `... backtest` runs the walk-forward
+eval_models.py    single-stage vs component vs blend head-to-head on the 2025-26 holdout
 backtest.py        walk-forward validation + rolling-origin cross-season CV -> data/backtest_results.csv
 predict.py         scores all ~650 current players via live per-player API data -> data/player_predictions.csv
-                    real next-fixture venue + opponent form (trained-in) + a small residual FDR nudge + FPL's price-change signal
-                    + start_probability (rotation-risk column from the minutes classifier)
+                    blends the single-stage regressor with the component model (COMPONENT_BLEND_WEIGHT),
+                    real next-fixture venue + opponent form + strength ratings + double-gameweek fixture count
+                    (n_fixtures) + a small residual FDR nudge + FPL's price-change signal + start_probability
 squad_value.py      reconstructs real purchase price (from public transfer history + GW1 price) and FPL's true sell price
 fixtures_fdr.py     next-N-fixture difficulty per team, fixture difficulty matrix for the heatmap chart
 recommend.py        squad-specific: optimal XI, captain/vice, transfer suggestions (uses real sell price + fixture-adjusted points)
@@ -97,11 +104,85 @@ python src/recommend.py 8041052 <latest_finished_or_current_event>
 python src/mini_league.py 1766517 <event> 8041052
 ```
 
-Re-run `collect_history.py` + `features.py` + `train_model.py` only
-occasionally (e.g. once a month, or after a full season completes) — the
-model doesn't need retraining every gameweek, only the live predictions do.
+Re-run `collect_history.py` + `features.py` + `train_model.py` +
+`components.py` only occasionally (e.g. once a month, or after a full season
+completes; the weekly GitHub Action does it automatically) — the models
+don't need retraining every gameweek, only the live predictions do.
 
 ## Model
+
+The production prediction is a **blend of two models** (weight
+`COMPONENT_BLEND_WEIGHT` in `predict.py`, currently 0.7 on the component
+model): a **component "events → scoring matrix" model** and the original
+**single-stage regressor** below. They make different errors, so the blend
+beats either alone.
+
+### Component model (`src/components.py`, `src/scoring.py`)
+
+Rather than regress total points directly, predict each underlying event and
+run it through the real FPL scoring rules:
+
+| sub-model | type | target | → |
+|---|---|---|---|
+| minutes | LightGBM multiclass | {unused, 1-59 min, 60+ min} | `p_cameo`, `p_start` |
+| goals | LightGBM Poisson (started rows) | `goals_scored` | `E[goals \| start]` |
+| assists | LightGBM Poisson (started rows) | `assists` | `E[assists \| start]` |
+| bonus | LightGBM Tweedie (started rows) | `bonus` | `E[bonus \| start]` |
+| saves | LightGBM Poisson (started GKP) | `saves` | `E[saves \| start]` |
+| team clean sheet | LightGBM binary (team-fixture) | team GA == 0 | `P(CS)` |
+| team goals conceded | LightGBM Poisson (team-fixture) | team GA | `E[GC]` |
+| defensive contribution | LightGBM binary (2025-26 only) | DC threshold hit | `P(DC +2)` |
+
+`scoring.compose_expected_points()` combines these with the position-specific
+scoring matrix (goal 4/5/6, CS 4/1/0, −1 per 2 conceded, +1 per 3 saves, the
+2025-26 DC +2, cards) and the minutes probabilities (a cameo is credited a
+fraction of a starter's attacking rate). A per-position affine calibration
+(`actual ≈ a + b·raw`, fit on held-out training gameweeks) removes the small
+biases that accumulate from summing eight independent models.
+
+**Why this structure:**
+- The **2025-26 defensive-contribution rule** (DEF: 10+ CBIT → +2; MID/FWD:
+  12+ CBIT+recoveries → +2) has ~0 rows of training history. A direct points
+  regressor can't learn it; here it's an explicit `+2 · P(threshold)` term.
+- **Double gameweeks**: `compose()` runs per fixture and `predict.py` sums a
+  team's fixtures in the target gameweek (`n_fixtures` column). A one-fixture
+  regressor has no way to express "two games this week".
+- **Interpretability**: every predicted point traces to a component.
+
+Extra features over the single-stage model: separate rolling xG / xA (not
+just the xGI sum) and per-90 versions, ICT split into influence/creativity/
+threat, rolling BPS/bonus/saves/DC, points consistency (rolling std),
+**FPL team strength ratings** (`data/team_strength.csv`, from the archive's
+`teams.csv`) for both teams, and **cross-season career priors** keyed on the
+stable FPL player `code` (`data/player_codes.csv`) rather than the archive's
+per-season `element` id — so a GW1-4 row inherits last season's baseline
+instead of starting from nothing.
+
+Training window: **2022-23 → 2024-25** (first seasons with xG/xA/xGC in the
+archive), 2025-26 held out. Team clean-sheet / goals-conceded models train on
+the **full archive back to 2016-17** (goals/CS don't need xG) plus the
+strength ratings, because ~20 matches per team per season is otherwise too
+thin.
+
+**Measured vs the single-stage model (2025-26 holdout / walk-forward):**
+
+| metric | single-stage | component | blend (0.7) |
+|---|---|---|---|
+| walk-forward MAE | 0.955 | **0.944** | — |
+| season-holdout MAE | 0.967 | **0.949** | 0.950 |
+| 60+ min (started) MAE | 2.374 | **2.350** | 2.341 |
+| non-playing MAE | 0.324 | **0.278** | 0.292 |
+| within-GW Spearman ρ | 0.721 | **0.747** | 0.729 |
+| cameo (1-59 min) MAE | **1.184** | 1.318 | 1.270 |
+
+The component model is better on total accuracy, started-player accuracy and
+ranking; the single-stage model is steadier on cameo returns and marginally
+on the single top captain pick each week — hence the blend rather than a full
+switch. Run `python src/components.py` (train + report), `python
+src/components.py backtest` (walk-forward), and `python src/eval_models.py`
+(this table) to regenerate.
+
+### Single-stage model (`src/train_model.py`)
 
 LightGBM regression predicting a player's FPL points in a gameweek from
 features available *before* that gameweek: rolling 3/5-GW averages of
@@ -203,8 +284,21 @@ here since the evidence for the naive version didn't support switching).
 - Price-change alerts use FPL's own `price_change_projections` likelihood
   field, which is the platform's own signal but not a guarantee.
 - Early-season predictions (GW1-3) are inherently noisier — 1-2 games of
-  current-season data is a small sample, so the model leans more on season
-  cost/position priors until form accumulates.
+  current-season data is a small sample, so the models lean on cross-season
+  career priors (component model) and season cost/position priors until form
+  accumulates.
+- The component model's **cameo (1-59 min) accuracy is worse** than the
+  single-stage model's — a sub is credited a flat fraction (`SUB_*_SCALE` in
+  `scoring.py`) of a starter's rate rather than a learned cameo model. The
+  blend recovers most of the gap.
+- The component **team clean-sheet** sub-model is only ~0.66 AUC (2025-26
+  holdout) — match-level clean sheets are genuinely hard and there are ~20
+  matches per team per season to learn from even using the full archive.
+- Component **defensive-contribution** sub-model trains on 2025-26 only (the
+  one season the rule and the data exist), so it has one partial season of
+  history behind it.
+- Blank gameweeks: a team with no fixture in the target GW gets no component
+  score and falls back to the single-stage number rather than ~0.
 - Mini-league squads are only visible for gameweeks whose deadline has
   passed (FPL doesn't expose other managers' *upcoming* picks, only yours).
 - The two-stage hurdle model was tried and its naive combination underperformed

@@ -18,12 +18,30 @@ and cross-session messages don't leave a permanent record here.
 
 ## What's working right now
 
-- **ML pipeline** (`src/`): LightGBM points model, trained opponent-strength and
-  real fixture-venue features, honest decision-quality metrics, walk-forward and
-  rolling-origin validation, a P(minutes>=60) classifier exposed as
-  `start_probability` (kept separate from the main prediction, the naive
-  combination was worse, see README). Chip strategy optimizer (`chips.py`,
-  ILP via `pulp`), mini-league projections and banter stats (`league_projection.py`).
+- **ML pipeline** (`src/`): the live `pred_points` is now a **blend** of the
+  original single-stage LightGBM regressor and a new **component model**
+  (`components.py` + `scoring.py`): 8 sub-models (minutes multiclass, goals/
+  assists Poisson, bonus Tweedie, saves, team clean-sheet, team goals-conceded,
+  2025-26 defensive-contribution) composed through the real FPL scoring matrix,
+  per-position calibrated, blended at `COMPONENT_BLEND_WEIGHT=0.7` in
+  `predict.py`. Measured gain on the 2025-26 holdout: walk-forward MAE
+  0.955 -> 0.944, started-player MAE 2.374 -> 2.350, within-GW Spearman
+  0.721 -> 0.747; handles double gameweeks (`n_fixtures` column) and the new
+  defensive-contribution points explicitly. `src/eval_models.py` regenerates
+  the head-to-head table; `python src/components.py [backtest]` trains / walk-
+  forwards. New data artifacts (committed): `data/team_strength.csv`,
+  `data/player_codes.csv`, `data/career_priors.csv`, `models/components/`,
+  `data/backtest_component_results.csv`. `collect_history.py` now also fetches
+  `teams.csv` + `players_raw.csv` per season; the weekly retrain Action runs
+  `components.py` too. Still present and unchanged: trained opponent-strength /
+  real fixture-venue features, rolling-origin validation, the P(minutes>=60)
+  classifier. Chip strategy optimizer (`chips.py`, ILP via `pulp`), mini-league
+  projections and banter stats (`league_projection.py`).
+- **Component model open follow-ups**: cameo (1-59 min) accuracy is a
+  regression vs single-stage (crude `SUB_*_SCALE` flat fractions in
+  `scoring.py`, not a learned cameo model) -- the blend hides most of it;
+  team clean-sheet sub-model is only ~0.66 AUC; blank-gameweek players fall
+  back to the single-stage number rather than ~0.
 - **Desktop GUI** (`gui/`, PySide6): full GUI_PLAN.md visual modernization applied
   (Graphite theme, redone charts, chip/league tabs wired in, AI Assistant tab with
   markdown rendering). Smoke-tested clean end to end on 2026-09-05, full refresh
